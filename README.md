@@ -2,8 +2,75 @@
 
 A modern SSH client for Windows and Linux that looks like the Kali Linux terminal.
 
-Planned v1 features: password, key and keyboard-interactive login, host-key checks, saved sessions, Kali-Dark theme with Fira Code, and support for Tailscale SSH check-mode sign-in links.
+![GhostKey connected to a Kali box](docs/screenshots/connected.png)
 
-See [SPEC.md](SPEC.md) for the full design.
+> **Status: alpha.** It works for everyday logins, but expect rough edges. Please report anything odd.
 
-> Status: pre-alpha, not ready for use yet.
+## What's in the alpha
+
+- **Kali look:** Kali-Dark colors and Fira Code, taken from Kali's own QTerminal settings. Folder and file colors from `ls` and the bold `user@host` prompt look the same as on Kali.
+- **Login:** password, keyboard-interactive, and private keys (OpenSSH or PuTTY `.ppk`, with or without a passphrase).
+- **Host-key checks:** you confirm a new server's fingerprint once. If a known server's key changes, GhostKey blocks the connection and warns you.
+- **Saved sessions:** sorted into folders, with search. Passwords are stored in your system keychain (Windows Credential Manager, or GNOME Keyring / KWallet on Linux), never in a file.
+- **Tailscale SSH:** when a server in check mode sends a sign-in link, GhostKey shows it with an **Open in browser** button and waits for you to approve. You can set it to open the link automatically for each session.
+
+| Tailscale sign-in | New host key | Session editor |
+| --- | --- | --- |
+| ![Tailscale approval](docs/screenshots/tailscale.png) | ![Host key prompt](docs/screenshots/hostkey.png) | ![Session editor](docs/screenshots/editor.png) |
+
+## Install the alpha
+
+Every push builds installers in GitHub Actions. Open the latest **CI** run on the [Actions tab](../../actions), scroll down to **Artifacts**, and download:
+
+- **GhostKey-Windows:** a `.msi` or `-setup.exe` installer.
+- **GhostKey-Linux:** a `.deb` (Debian, Ubuntu, Kali), a `.rpm` (Fedora), or an `.AppImage` (any distribution).
+
+The Windows installers aren't code-signed yet, so SmartScreen will warn you. Click **More info**, then **Run anyway**.
+
+Tagged releases (`v0.1.0-alpha.1` and so on) are published as draft pre-releases on the [Releases page](../../releases).
+
+## Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
+| Right-click | Copy the selection, or paste when nothing is selected |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Bigger / smaller / default font size |
+| Ctrl+click a link | Open it in your browser |
+
+## Where your data lives
+
+| What | Where |
+| --- | --- |
+| Saved sessions | `sessions.json` in the app config folder (`%APPDATA%\com.anon0ne.ghostkey` on Windows, `~/.config/com.anon0ne.ghostkey` on Linux) |
+| Trusted host keys | `known_hosts` in the same folder (OpenSSH format) |
+| Passwords and passphrases | Your system keychain, under the service name "GhostKey" |
+
+## Building from source
+
+You need Rust (stable), Node.js 20 or later, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS. On Debian or Kali:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+```
+
+Then:
+
+```sh
+npm install
+npm run tauri dev      # run with hot reload
+npm run tauri build    # build installers into src-tauri/target/release/bundle
+```
+
+### Tests
+
+```sh
+cd src-tauri
+cargo test
+```
+
+The live SSH tests run against a real OpenSSH server. To run them locally, start the throwaway server with `sudo scripts/test-sshd.sh /tmp/gk-sshd`, export the variables it prints, then run `cargo test`.
+
+## Design
+
+See [SPEC.md](SPEC.md) for the full v1 design: scope, theme values, architecture, and how login works.

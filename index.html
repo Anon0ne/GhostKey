@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GhostKey</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="brand">
+          <img src="/ghostkey.svg" alt="" width="22" height="22" />
+          <span>GhostKey</span>
+          <span class="badge">alpha</span>
+        </div>
+        <form id="quick-connect" autocomplete="off">
+          <input id="quick-input" placeholder="Quick connect: user@host:port" spellcheck="false" />
+        </form>
+        <div class="sidebar-row">
+          <input id="search" placeholder="Search sessions" spellcheck="false" />
+          <button id="new-session" class="icon-btn" title="New session">+</button>
+        </div>
+        <nav id="session-list"></nav>
+      </aside>
+      <main id="main">
+        <header id="toolbar">
+          <span id="status-dot" class="dot"></span>
+          <span id="conn-title">Not connected</span>
+          <span id="conn-status"></span>
+          <span class="spacer"></span>
+          <button id="disconnect" class="btn" hidden>Disconnect</button>
+        </header>
+        <section id="banner" hidden>
+          <pre id="banner-text"></pre>
+          <div id="banner-links"></div>
+          <div id="banner-wait" hidden>
+            <span class="spinner"></span>
+            <span>Waiting for Tailscale approval in your browser…</span>
+            <button id="banner-cancel" class="btn">Cancel</button>
+          </div>
+        </section>
+        <div id="terminal"></div>
+      </main>
+    </div>
+    <div id="modal-root"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
