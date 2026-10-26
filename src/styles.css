@@ -1,0 +1,500 @@
+/* GhostKey: Kali-Dark shell. Terminal colors live in theme.ts. */
+:root {
+  --bg: #23252e;
+  --bg-deep: #1b1d24;
+  --panel: #2a2d38;
+  --panel-hover: #323644;
+  --border: #3a3e4c;
+  --text: #e6e6e6;
+  --muted: #9aa0ae;
+  --accent: #367bf0;
+  --accent-hover: #277fff;
+  --green: #5ebdab;
+  --yellow: #fea44c;
+  --red: #d41919;
+  --mono: "Fira Code", "DejaVu Sans Mono", Consolas, monospace;
+  --ui: system-ui, "Segoe UI", "Noto Sans", "Cantarell", sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 var(--ui);
+  overflow: hidden;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100vh;
+}
+
+/* ------------------------------------------------------------ sidebar */
+
+#sidebar {
+  background: var(--bg-deep);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+input,
+select {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font: inherit;
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+input.invalid {
+  border-color: var(--red);
+}
+
+#quick-connect {
+  padding: 0 12px 8px;
+}
+
+#quick-input {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.sidebar-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+#session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px 12px;
+}
+
+.empty {
+  color: var(--muted);
+  padding: 8px;
+}
+
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: 0;
+  color: var(--yellow);
+  font: 600 12px var(--ui);
+  padding: 8px 6px 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.folder-head .chev {
+  transition: transform 0.15s;
+  color: var(--muted);
+}
+
+.folder-head.collapsed .chev {
+  transform: rotate(-90deg);
+}
+
+.folder .folder-head ~ .session {
+  margin-left: 10px;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: default;
+  outline: none;
+}
+
+.session:hover,
+.session:focus {
+  background: var(--panel);
+}
+
+.session-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.session-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-host {
+  font: 11.5px var(--mono);
+  color: var(--green);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-actions {
+  display: none;
+  gap: 2px;
+}
+
+.session:hover .row-actions,
+.session:focus-within .row-actions {
+  display: flex;
+}
+
+.row-btn,
+.icon-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  border-radius: 5px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 12px;
+  flex: none;
+}
+
+.row-btn:hover,
+.icon-btn:hover {
+  color: var(--text);
+  background: var(--panel-hover);
+}
+
+.icon-btn {
+  border-color: var(--border);
+  width: 33px;
+  height: auto;
+  font-size: 16px;
+}
+
+/* ------------------------------------------------------------ main */
+
+#main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-deep);
+  min-height: 49px;
+}
+
+#conn-title {
+  font-weight: 600;
+}
+
+#conn-status {
+  color: var(--muted);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot.busy {
+  background: var(--yellow);
+}
+
+.dot.online {
+  background: var(--green);
+}
+
+.dot.error {
+  background: var(--red);
+}
+
+#terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 5px; /* QTerminal's TerminalMargin=5 */
+  background: var(--bg);
+}
+
+/* ------------------------------------------------------------ Tailscale banner */
+
+#banner {
+  margin: 10px 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  background: rgba(54, 123, 240, 0.1);
+  border-radius: 8px;
+}
+
+#banner-text {
+  margin: 0 0 8px;
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.banner-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.banner-link code {
+  font: 12px var(--mono);
+  color: var(--accent-hover);
+  word-break: break-all;
+  flex: 1;
+}
+
+#banner-wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+#banner-wait[hidden],
+#banner[hidden] {
+  display: none;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------ buttons */
+
+.btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--panel-hover);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn.danger.primary {
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent-hover);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.link-btn[disabled] {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ modals */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 15, 0.6);
+  display: grid;
+  place-items: center;
+  z-index: 10;
+}
+
+.modal {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal h2 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+.modal p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.modal-error {
+  color: #ff6b6b;
+  min-height: 0;
+}
+
+.modal-error:empty {
+  display: none;
+}
+
+.modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.field small,
+.hint {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.check input {
+  width: auto;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.grid.host-row {
+  grid-template-columns: 1fr 90px;
+}
+
+.inline {
+  display: flex;
+  gap: 6px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.fingerprint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.fingerprint span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fingerprint code {
+  font: 13px var(--mono);
+  color: var(--green);
+  word-break: break-all;
+}
