@@ -465,7 +465,7 @@ function renderSnippetBar() {
 
 function snippetTitle(s: Snippet): string {
   const how = s.run ? "Runs" : "Types in (you press Enter)";
-  return `${how}: ${payload(s).text}`;
+  return `${how}: ${pastePreview(payload(s).text)}`;
 }
 
 function destination(pane: Pane): string {
@@ -501,8 +501,10 @@ async function sendSnippet(s: Snippet) {
             `${lines} ${lines === 1 ? "line" : "lines"}.`,
             enter ? "Enter is pressed after the text." : "Nothing runs until you press Enter.",
             lines > 1 ? "If the server's shell doesn't support bracketed paste, each line may run as it arrives." : "",
-            careful ? "Control characters other than line feed are shown as Unicode escapes." : "",
-          ].join(" "),
+            pastePreview(text) !== text ? "Control characters other than line feed are shown as Unicode escapes." : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
         }),
       ],
       // Like the paste review, Enter cancels when the text could run more than one command.

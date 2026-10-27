@@ -38,7 +38,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
-| F08 | Command snippets and button bar | In progress | Claude | `snippets` | Implemented; awaiting review and merge. Placeholders not done |
+| F08 | Command snippets and button bar | In progress | Claude | `snippets` (#9) | Implemented and joined to the F15 paste rules; awaiting merge. Placeholders not done |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
 | F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
