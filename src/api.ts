@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { Scan } from "./importPlan";
 
 export type AuthMethod = "password" | "key";
 
@@ -89,4 +90,6 @@ export const api = {
   getLogDir: () => invoke<string>("get_log_dir"),
   setLogDir: (dir: string | null) => invoke<string>("set_log_dir", { dir }),
   openLogDir: () => invoke<void>("open_log_dir"),
+  scanImports: () => invoke<Scan>("scan_imports"),
+  scanSshConfig: (path: string) => invoke<Scan>("scan_ssh_config", { path }),
 };

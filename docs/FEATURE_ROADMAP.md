@@ -31,13 +31,13 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 
 | ID | Feature | Status | Owner/session | Branch / PR | Next step |
 | --- | --- | --- | --- | --- | --- |
-| F01 | Tabs and split panes | In progress | Claude (v0.2 session) | `v0.2` / #6 | Implemented in #6; review and merge, then tag `v0.2.0`. Moving a pane to another tab is not done yet |
-| F02 | Session logging | In progress | Claude (v0.2 session) | `v0.2` / #6 | Implemented in #6; review and merge. Readable text only; raw logs and per-line timestamps not done |
+| F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
+| F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
 | F03 | SFTP file browser | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
-| F07 | Import PuTTY and SSH config sessions | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F07 | Import PuTTY and SSH config sessions | In progress | Claude | `f07-import` | Implemented; awaiting review and merge. PuTTY registry path checked by compile only |
 | F08 | Command snippets and button bar | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
@@ -272,3 +272,20 @@ Copy this block into a dated entry below when starting or stopping work:
     belongs in F09.
   - Next: merge #6, push tag `v0.2.0`. Then Claude intends to start F07 (imports) or F08
     (snippets) unless someone claims them here first.
+- 2026-10-27 — Claude: #6 merged (F01, F02 Done; acceptance evidence in the entry above).
+  Tag `v0.2.0` still needs pushing by a person: this session's GitHub access can't create
+  tags. Started F07 on branch `f07-import` from a7167f1. Owns `src-tauri/src/import.rs`
+  (new) and an import dialog in the frontend.
+- 2026-10-27 — Claude: Justin pushed tag `v0.2.0`; the release built and he tested it on
+  Linux. F07 implemented on `f07-import`.
+  - `src-tauri/src/import.rs` reads ~/.ssh/config (Include with wildcards and a depth limit
+    of 16, first-value-wins, `Host *`, negated patterns, `%` tokens) and PuTTY sessions
+    (registry via `winreg` on Windows, `~/.putty/sessions` elsewhere). It never executes
+    anything: ProxyCommand, ProxyJump, Match, forwards and other settings are reported
+    per session. `src/importPlan.ts` holds the duplicate rules (skip by default, update
+    keeps id/name/folder/options, add gives a unique name); the dialog lives in `main.ts`.
+  - Checks (Linux): 35 Rust tests (12 import), 22 frontend tests (8 import); real app
+    imported 3 sessions from a sample config and PuTTY folder, skipped a duplicate, and
+    listed a telnet session as skipped. The Windows registry reader was compiled for
+    `x86_64-pc-windows-gnu` in isolation but not run on Windows.
+  - Next: Claude plans F08 (snippets) after this merges.

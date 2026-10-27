@@ -8,6 +8,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { api, type SavedSession } from "./api";
 import { ansi, type BaseRequest } from "./connection";
 import { clampRatio, leaf, nearest, panes, remove, split, type Dir, type Direction, type LayoutNode } from "./layout";
+import { planRows, problem, toSessions, type Row, type Scan } from "./importPlan";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { DEFAULT_FONT_SIZE } from "./theme";
@@ -312,6 +313,119 @@ function setFontSize(size: number): true {
   return true;
 }
 
+// ---------------------------------------------------------------- import
+
+async function importSessions() {
+  let scan: Scan;
+  try {
+    scan = await api.scanImports();
+  } catch (e) {
+    await confirm("Couldn't look for sessions", String(e), "OK");
+    return;
+  }
+  let rows: Row[] = planRows(scan.candidates, sessions);
+  const folder = el("input", { value: "Imported", spellcheck: "false" });
+  const summary = el("div", { class: "import-sources" });
+  const table = el("div", { class: "import-list" });
+
+  const renderSources = () => {
+    summary.replaceChildren();
+    for (const s of scan.sources) {
+      const count = scan.candidates.filter((c) => c.source === s.label).length;
+      const status = s.error ? `couldn't read: ${s.error}` : !s.found ? "not found" : `${count} ${count === 1 ? "session" : "sessions"}`;
+      summary.append(el("div", { class: `import-source${s.error ? " bad" : ""}` }, el("strong", { text: s.label }), el("span", { text: ` ${status}` })));
+      for (const note of s.notes) summary.append(el("div", { class: "import-note", text: note }));
+    }
+  };
+
+  const renderRows = () => {
+    table.replaceChildren();
+    if (rows.length === 0) {
+      table.append(el("p", { class: "empty", text: "No sessions found. Try choosing a config file." }));
+      return;
+    }
+    for (const row of rows) {
+      const c = row.candidate;
+      const pick = el("input", { type: "checkbox", checked: row.selected, "aria-label": `Import ${c.name}` });
+      const name = el("input", { value: row.name, spellcheck: "false", "aria-label": "Name" });
+      const user = el("input", { value: row.username, placeholder: "user", spellcheck: "false", "aria-label": "User" });
+      pick.addEventListener("change", () => (row.selected = pick.checked));
+      name.addEventListener("input", () => (row.name = name.value));
+      user.addEventListener("input", () => {
+        row.username = user.value;
+        if (user.value.trim() && !row.existing) pick.checked = row.selected = true;
+      });
+      const where = `${c.host}${c.port === 22 ? "" : `:${c.port}`}`;
+      const details = el(
+        "div",
+        { class: "import-details" },
+        el("div", { class: "import-target" }, user, el("span", { class: "session-host", text: `@${where}` })),
+        el("small", { class: "hint", text: [c.source, c.keyPath ? `key ${c.keyPath}` : "password login"].join(" · ") }),
+        ...c.notes.map((n) => el("small", { class: "import-note", text: n })),
+      );
+      if (row.existing) {
+        const action = el(
+          "select",
+          { "aria-label": "Already saved" },
+          el("option", { value: "skip", text: `Skip: already saved as "${row.existing.name}"` }),
+          el("option", { value: "update", text: `Update "${row.existing.name}"` }),
+          el("option", { value: "add", text: "Add as a new session" }),
+        );
+        action.value = row.action;
+        action.addEventListener("change", () => {
+          row.action = action.value as Row["action"];
+          pick.checked = row.selected = row.action !== "skip";
+        });
+        details.append(action);
+      }
+      table.append(el("div", { class: "import-row" }, pick, el("div", { class: "import-main" }, name, details)));
+    }
+  };
+
+  const choose = el("button", { class: "btn", type: "button", text: "Choose a config file…" });
+  choose.addEventListener("click", async () => {
+    const picked = await openFileDialog({ multiple: false, directory: false, title: "Choose an OpenSSH config file" });
+    if (typeof picked !== "string") return;
+    const extra = await api.scanSshConfig(picked);
+    scan = { candidates: [...scan.candidates, ...extra.candidates], sources: [...scan.sources, ...extra.sources] };
+    rows = [...rows, ...planRows(extra.candidates, sessions)];
+    renderSources();
+    renderRows();
+  });
+
+  renderSources();
+  renderRows();
+  const ok = await showModal<boolean>({
+    title: "Import sessions",
+    wide: true,
+    body: [
+      el("p", { class: "hint", text: "Found in your SSH config and PuTTY. Nothing is changed in those files, and no commands in them are run. Passwords are never imported." }),
+      summary,
+      table,
+      el("div", { class: "grid" }, field("Put new sessions in folder", folder), el("div", { class: "import-choose" }, choose)),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Import", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+    validate: () => problem(rows),
+  }).result;
+  if (!ok) return;
+
+  const chosen = toSessions(rows, folder.value, () => crypto.randomUUID(), sessions);
+  const failed: string[] = [];
+  for (const s of chosen) {
+    try {
+      await api.saveSession(s);
+    } catch (e) {
+      failed.push(`${s.name}: ${e}`);
+    }
+  }
+  await refreshSessions();
+  if (failed.length) await confirm("Some sessions weren't imported", failed.join("\n"), "OK");
+}
+
 // ---------------------------------------------------------------- settings
 
 async function openSettings() {
@@ -612,6 +726,7 @@ $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).clas
 
 $("search").addEventListener("input", renderSessions);
 $("new-session").addEventListener("click", () => editSession());
+$("import-sessions").addEventListener("click", importSessions);
 $("settings").addEventListener("click", openSettings);
 $("new-tab").addEventListener("click", () => newTab());
 $("disconnect").addEventListener("click", () => activePane().conn.disconnect());

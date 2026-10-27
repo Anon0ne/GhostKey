@@ -111,7 +111,15 @@ Session details are saved in a plain JSON file. Passwords and passphrases are ne
 | Known hosts | `known_hosts` in the app's config folder (OpenSSH format) |
 | Settings (log folder) | `settings.json` in the app's config folder |
 
-Importing sessions from PuTTY and from `~/.ssh/config` is optional for v1 and may move to v1.1.
+### Importing sessions
+
+The ⇩ button scans `~/.ssh/config` and PuTTY's saved sessions (the registry on Windows, `~/.putty/sessions` elsewhere), and the user can add another OpenSSH config file. Nothing is saved until the user confirms the preview.
+
+- **OpenSSH config:** every concrete name on a `Host` line becomes a session; wildcard and negated patterns are applied but are not sessions. Values follow OpenSSH: the first value wins, `Host *` and the global section apply, `Include` files are read in place (relative to `~/.ssh`, wildcards in the file name, nesting stops at 16), and `~`, `%h`, `%r`, `%u`, `%d` are expanded. Missing `User` uses the local user name, and a missing `IdentityFile` uses the first default key that exists, as ssh would; the preview says so. `Match` blocks are skipped and reported.
+- **PuTTY:** host (including `user@host`), port, user and key file. Telnet, serial and other non-SSH sessions are skipped and listed.
+- **Never run, always reported:** `ProxyCommand`, `ProxyJump`, port forwards, proxies and any other setting GhostKey can't use are listed for each session. Imported sessions connect directly until jump hosts exist.
+- **Duplicates:** a session for the same user, host and port, or with the same name, starts as "Skip". It can be switched to "Update" (keeps the saved name, folder and options; replaces host, port, user and key) or "Add as a new session" (gets a "(2)" name).
+- No passwords are read; PuTTY and OpenSSH configs don't hold them. Source files are only read.
 
 ## Build, test and packaging
 

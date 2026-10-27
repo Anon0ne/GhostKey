@@ -14,11 +14,14 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **Saved sessions:** sorted into folders, with search. Passwords are stored in your system keychain (Windows Credential Manager, or GNOME Keyring / KWallet on Linux), never in a file.
 - **Tailscale SSH:** when a server in check mode sends a sign-in link, GhostKey shows it with an **Open in browser** button and waits for you to approve. You can set it to open the link automatically for each session.
 - **Tabs and split panes (new in 0.2):** open as many sessions as you like in tabs, and split any tab side by side or top and bottom. Each pane has its own connection and Reconnect button. Splitting a connected pane opens a second shell on the same server.
+- **Import (new):** bring in sessions from `~/.ssh/config` and PuTTY with the ⇩ button. You see everything first, pick what to import, and fix names or users. Sessions you already have are skipped unless you choose to update them. GhostKey only reads those files, never runs commands from them, and tells you what it couldn't bring over (such as ProxyJump or port forwards).
 - **Session logging (new in 0.2):** save what a session prints to a timestamped text file, with colors removed. Start and stop it from the toolbar, or set a saved session to log automatically. Choose the folder in Settings (⚙).
 
 | Tailscale sign-in | New host key | Session editor |
 | --- | --- | --- |
 | ![Tailscale approval](docs/screenshots/tailscale.png) | ![Host key prompt](docs/screenshots/hostkey.png) | ![Session editor](docs/screenshots/editor.png) |
+
+![Import preview](docs/screenshots/import.png)
 
 ## Install the alpha
 
