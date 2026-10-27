@@ -67,6 +67,7 @@ term.loadAddon(
 
 interface Connection {
   gen: number;
+  request: Omit<ConnectRequest, "cols" | "rows">;
   id: number | null;
   title: string;
   connected: boolean;
@@ -82,7 +83,13 @@ function setStatus(state: "idle" | "busy" | "online" | "error", title: string, s
   $("status-dot").className = `dot ${state}`;
   $("conn-title").textContent = title;
   $("conn-status").textContent = status;
-  $<HTMLButtonElement>("disconnect").hidden = !(conn && !conn.closed);
+  const active = !!conn && !conn.closed;
+  const disconnectButton = $<HTMLButtonElement>("disconnect");
+  disconnectButton.hidden = !active;
+  disconnectButton.textContent = conn?.connected ? "Disconnect" : "Cancel";
+  const retryButton = $<HTMLButtonElement>("reconnect");
+  retryButton.hidden = !conn || active;
+  retryButton.textContent = conn?.connected ? "Reconnect" : "Retry connection";
 }
 
 function welcome() {
@@ -103,7 +110,7 @@ async function connectTo(req: Omit<ConnectRequest, "cols" | "rows">, title: stri
     disconnect();
   }
   const myGen = ++gen;
-  conn = { gen: myGen, id: null, title, connected: false, closed: false };
+  conn = { gen: myGen, request: { ...req }, id: null, title, connected: false, closed: false };
   term.reset();
   hideBanner();
   fit.fit();
@@ -115,14 +122,22 @@ async function connectTo(req: Omit<ConnectRequest, "cols" | "rows">, title: stri
     const id = await api.connect(
       full,
       (e) => {
-        if (conn?.gen === myGen) onConnEvent(e);
+        if (conn?.gen === myGen && !conn.closed) onConnEvent(e);
       },
       (data) => {
-        if (conn?.gen === myGen) term.write(data);
+        if (conn?.gen === myGen && !conn.closed) term.write(data);
       },
     );
-    if (conn?.gen === myGen) conn.id = id;
+    if (conn?.gen !== myGen || conn.closed) {
+      await api.disconnect(id);
+      return;
+    }
+    conn.id = id;
+    if (conn.connected) api.resize(id, term.cols, term.rows);
   } catch (e) {
+    if (conn?.gen !== myGen || conn.closed) return;
+    closePrompts();
+    hideBanner();
     term.writeln(ansi.err(`Couldn't start the connection: ${e}`));
     if (conn?.gen === myGen) conn.closed = true;
     setStatus("error", title, "Failed");
@@ -545,6 +560,9 @@ $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).clas
 $("search").addEventListener("input", renderSessions);
 $("new-session").addEventListener("click", () => editSession());
 $("disconnect").addEventListener("click", disconnect);
+$("reconnect").addEventListener("click", () => {
+  if (conn?.closed) connectTo(conn.request, conn.title);
+});
 $("banner-cancel").addEventListener("click", disconnect);
 
 term.onData((data) => {
