@@ -85,7 +85,7 @@ export function showModal<T>(opts: {
     if (e.key === "Escape") {
       e.preventDefault();
       finish(opts.onDismiss());
-    } else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) {
+    } else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLTextAreaElement)) {
       const primary = opts.buttons.find((b) => b.primary);
       if (primary) {
         e.preventDefault();

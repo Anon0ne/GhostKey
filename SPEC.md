@@ -100,6 +100,17 @@ When you connect, GhostKey checks the server's host key first. It then tries key
 - Answers typed into login dialogs never pass through the terminal stream, so they are never logged. Everything the server prints is, including any secrets it shows; the session editor and Settings say so.
 - If writing fails (disk full, folder removed), logging stops and the error shows in the terminal. The SSH session stays up.
 
+## Snippets and button bar
+
+Snippets are saved commands with a name, an optional group, and a mode. They live in `snippets.json` in the app config folder. Starred snippets appear as buttons on a bar above the terminal; Ctrl+Shift+S opens the full list, where they can be sent, edited or deleted.
+
+- **Type in (default):** the text is pasted into the focused pane and nothing runs until the user presses Enter. Buttons show the name only.
+- **Run:** Enter is pressed after the text. Buttons show ⏎ and an orange outline.
+- Trailing newlines in a snippet are dropped, so only the mode decides whether it runs.
+- **Preview:** running a snippet, or sending one with several lines, first shows the destination (session name, user, host and port), the exact text and the line count. The destination is fixed when the button is pressed, so changing focus during the preview can't redirect it. If the pane disconnects meanwhile, nothing is sent.
+- Text is sent with the terminal's paste, so shells that support bracketed paste receive several lines as one paste. The preview warns that other shells may run each line as it arrives.
+- Snippets go only to the focused pane, and only when it's connected; the bar's buttons are disabled otherwise. Placeholders are not supported yet. A fuller paste preview for every paste is planned as F15.
+
 ## Saved sessions and security
 
 Session details are saved in a plain JSON file. Passwords and passphrases are never written there.
@@ -110,6 +121,7 @@ Session details are saved in a plain JSON file. Passwords and passphrases are ne
 | Passwords and key passphrases | Windows Credential Manager, or the Linux Secret Service (GNOME Keyring or KWallet) |
 | Known hosts | `known_hosts` in the app's config folder (OpenSSH format) |
 | Settings (log folder) | `settings.json` in the app's config folder |
+| Snippets | `snippets.json` in the app's config folder |
 
 ### Importing sessions
 

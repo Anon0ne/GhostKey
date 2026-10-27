@@ -136,6 +136,16 @@ test('single-line clipboard paste is immediate and offline paste is ignored', as
   assert.deepEqual(h.terminals[0].pasted, ['hello']);
 });
 
+test('an approved snippet is dropped if the pane reconnected meanwhile', () => {
+  const h = harness();
+  const bound = { id: h.pane.conn.id, request: h.pane.conn.request };
+  assert.equal(h.pane.sendText('ls', false, bound), true);
+  assert.deepEqual(h.terminals[0].pasted, ['ls']);
+  h.pane.conn.request = { ...h.pane.conn.request };
+  assert.equal(h.pane.sendText('id', true, bound), false);
+  assert.deepEqual(h.terminals[0].pasted, ['ls']);
+});
+
 test('search stays per-pane, uses literal matching, and supports navigation and dismissal', () => {
   const h = harness();
   const other = h.another();

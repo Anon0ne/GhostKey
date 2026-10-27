@@ -7,7 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import { api, type BannerLink, type Prompt, type PromptAnswer } from "./api";
-import { ansi, Connection } from "./connection";
+import { ansi, Connection, type BaseRequest } from "./connection";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { needsPastePreview, pasteLineCount, pastePreview } from "./paste";
 import { FONT_FAMILY, kaliDark } from "./theme";
@@ -190,6 +190,18 @@ export class Pane {
     } catch {
       // Clipboard unavailable; no terminal input was sent.
     }
+  }
+
+  /** Types an already approved snippet into the shell, then presses Enter if asked.
+   * Returns false when the pane disconnected or reconnected since `bound` was taken,
+   * so an approval never carries over to another connection. */
+  sendText(text: string, enter: boolean, bound: { id: number | null; request: BaseRequest | null }): boolean {
+    if (this.disposed || !this.conn.online || this.conn.id !== bound.id || this.conn.request !== bound.request) return false;
+    // paste() turns newlines into Enter and uses bracketed paste when the shell asks for it.
+    this.term.paste(text);
+    if (enter) this.conn.input("\r");
+    this.focus();
+    return true;
   }
 
   /** All programmatic pastes (including future snippets) must use this entry point. */

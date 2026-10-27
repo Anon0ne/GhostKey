@@ -5,6 +5,7 @@ mod logging;
 mod secrets;
 mod sessions;
 mod settings;
+mod snippets;
 mod ssh;
 
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use sessions::{SavedSession, SessionStore};
+use snippets::{Snippet, SnippetStore};
 use ssh::{ConnEvent, ConnectRequest, PromptAnswer, Sinks, Ssh};
 
 /// Commands return errors to the UI as plain strings.
@@ -33,6 +35,21 @@ fn list_sessions(store: State<'_, SessionStore>) -> CmdResult<Vec<SavedSession>>
 #[tauri::command]
 fn save_session(store: State<'_, SessionStore>, session: SavedSession) -> CmdResult<()> {
     store.save(session).map_err(err)
+}
+
+#[tauri::command]
+fn list_snippets(store: State<'_, SnippetStore>) -> CmdResult<Vec<Snippet>> {
+    store.list().map_err(err)
+}
+
+#[tauri::command]
+fn save_snippet(store: State<'_, SnippetStore>, snippet: Snippet) -> CmdResult<()> {
+    store.save(snippet).map_err(err)
+}
+
+#[tauri::command]
+fn delete_snippet(store: State<'_, SnippetStore>, id: Uuid) -> CmdResult<()> {
+    store.delete(id).map_err(err)
 }
 
 #[tauri::command]
@@ -197,6 +214,7 @@ pub fn run() {
                 current: Mutex::new(settings::load(&dir.join("settings.json"))),
             };
             app.manage(SessionStore::new(dir.join("sessions.json")));
+            app.manage(SnippetStore::new(dir.join("snippets.json")));
             app.manage(Arc::new(Ssh::new(dir.join("known_hosts"), state.log_dir())));
             app.manage(state);
             Ok(())
@@ -205,6 +223,9 @@ pub fn run() {
             list_sessions,
             save_session,
             delete_session,
+            list_snippets,
+            save_snippet,
+            delete_snippet,
             forget_secrets,
             connect,
             send_input,
