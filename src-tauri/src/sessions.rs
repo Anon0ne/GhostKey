@@ -37,6 +37,9 @@ pub struct SavedSession {
     /// Open Tailscale sign-in links without asking.
     #[serde(default)]
     pub auto_open_tailscale: bool,
+    /// Start a session log every time this session connects.
+    #[serde(default)]
+    pub auto_log: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -152,6 +155,7 @@ mod tests {
             auth: AuthMethod::Password,
             key_path: None,
             auto_open_tailscale: false,
+            auto_log: false,
         }
     }
 

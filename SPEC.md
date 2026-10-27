@@ -14,7 +14,9 @@ For the shared expansion backlog and AI-to-AI handoff, see [docs/FEATURE_ROADMAP
 | Kali theme | Kali's default terminal colors and font, used for the terminal and the app shell |
 | Tailscale verification | Spots the sign-in link that Tailscale SSH check mode sends, shows it as a link with an **Open in browser** button, and keeps the connection waiting until you approve |
 
-**Later releases:** session logging, tabs and split panes, SFTP browser, port forwarding, jump hosts, SSH agent, typing into several sessions at once, scripting, serial and telnet.
+**v0.2 adds** tabs, split panes and session logging; see [v0.2: tabs, split panes and logging](#v02-tabs-split-panes-and-logging).
+
+**Later releases:** SFTP browser, port forwarding, jump hosts, SSH agent, typing into several sessions at once, scripting, serial and telnet.
 
 ## Kali theme
 
@@ -76,15 +78,38 @@ When you connect, GhostKey checks the server's host key first. It then tries key
     - shows "Waiting for Tailscale approval" with a Cancel button, and turns off the normal login timeout while it waits;
     - never opens a link that isn't https, and asks before opening links to any other site.
 
+## v0.2: tabs, split panes and logging
+
+**Tabs and panes.** Each tab holds one or more panes, split side by side or one above the other, with a draggable divider. Every pane has its own terminal, connection, login prompts and Retry/Reconnect button, so closing or reconnecting one never touches another. The toolbar always describes the focused pane, which has a blue outline when a tab has more than one. Login dialogs name the session they belong to, switch to that pane, and appear one at a time. Splitting a connected pane opens a second shell on the same server. Opening a saved session uses the focused pane when it is idle, otherwise a new tab.
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+Shift+T | New tab |
+| Ctrl+Shift+W | Close the focused pane (asks first if it's connected) |
+| Ctrl+Shift+R / Ctrl+Shift+D | Split right / split down |
+| Alt+Arrow keys | Move focus to the next pane in that direction |
+| Alt+1 … Alt+9, Ctrl+PgUp / Ctrl+PgDn | Switch tabs |
+| Ctrl+Shift+L | Start or stop logging the focused pane |
+
+**Session logs.** A log is readable text: colors and cursor movement are removed, and line editing (backspace, carriage-return redraws, long command lines wrapped by the shell) is applied, like PuTTY's "printable output". The Rust core follows each session's output even while not logging, so a log started mid-line still records the whole line. Raw byte logs are not offered yet.
+
+- Start and stop from the toolbar or with Ctrl+Shift+L. A red **REC** marks the pane in the toolbar, and a red dot marks its tab.
+- Saved sessions can log automatically from the moment the shell opens.
+- Files are named `<session name>_<YYYY-MM-DD_HH-MM-SS>.log`, with `_2`, `_3` and so on if the name is taken, and start and end with a timestamped line.
+- The folder defaults to `Documents/GhostKey Logs` and can be changed in Settings.
+- Answers typed into login dialogs never pass through the terminal stream, so they are never logged. Everything the server prints is, including any secrets it shows; the session editor and Settings say so.
+- If writing fails (disk full, folder removed), logging stops and the error shows in the terminal. The SSH session stays up.
+
 ## Saved sessions and security
 
 Session details are saved in a plain JSON file. Passwords and passphrases are never written there.
 
 | Data | Where it's stored |
 | --- | --- |
-| Sessions (name, folder, host, port, user, login method, key path) | `sessions.json` in the app's config folder |
+| Sessions (name, folder, host, port, user, login method, key path, auto-log) | `sessions.json` in the app's config folder |
 | Passwords and key passphrases | Windows Credential Manager, or the Linux Secret Service (GNOME Keyring or KWallet) |
 | Known hosts | `known_hosts` in the app's config folder (OpenSSH format) |
+| Settings (log folder) | `settings.json` in the app's config folder |
 
 Importing sessions from PuTTY and from `~/.ssh/config` is optional for v1 and may move to v1.1.
 
@@ -99,3 +124,4 @@ Importing sessions from PuTTY and from `~/.ssh/config` is optional for v1 and ma
 1. Spec approved (this file).
 2. Alpha: Kali-themed terminal, login by password, key or keyboard-interactive, host-key checks, Tailscale sign-in links, and saved sessions.
 3. Testing against real servers, then the first packaged release.
+4. v0.2: tabs, split panes and session logging.

@@ -1,6 +1,6 @@
 [package]
 name = "ghostkey"
-version = "0.1.1"
+version = "0.2.0"
 description = "A modern SSH client with the Kali Linux terminal look"
 edition = "2021"
 rust-version = "1.80"
@@ -28,6 +28,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 log = "0.4"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+vte = "0.14"
 
 [dev-dependencies]
 tempfile = "3"

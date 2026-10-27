@@ -12,6 +12,7 @@ export interface SavedSession {
   auth: AuthMethod;
   keyPath: string | null;
   autoOpenTailscale: boolean;
+  autoLog: boolean;
 }
 
 export interface ConnectRequest {
@@ -22,6 +23,10 @@ export interface ConnectRequest {
   auth: AuthMethod;
   keyPath: string | null;
   autoOpenTailscale: boolean;
+  /** Start a session log as soon as the shell opens. */
+  log: boolean;
+  /** Names the log file; usually the session's name. */
+  label: string;
   cols: number;
   rows: number;
 }
@@ -48,6 +53,7 @@ export type ConnEvent =
   | { type: "banner"; text: string; links: BannerLink[]; autoOpened: string | null }
   | { type: "prompt"; id: number; prompt: Prompt }
   | { type: "connected" }
+  | { type: "logging"; path: string | null; error: string | null }
   | { type: "closed"; error: string | null };
 
 export interface PromptAnswer {
@@ -78,4 +84,9 @@ export const api = {
   answerPrompt: (id: number, answer: PromptAnswer) =>
     invoke<void>("answer_prompt", { id, answer }),
   openLink: (url: string) => invoke<void>("open_link", { url }),
+  startLog: (id: number) => invoke<void>("start_log", { id }),
+  stopLog: (id: number) => invoke<void>("stop_log", { id }),
+  getLogDir: () => invoke<string>("get_log_dir"),
+  setLogDir: (dir: string | null) => invoke<string>("set_log_dir", { dir }),
+  openLogDir: () => invoke<void>("open_log_dir"),
 };

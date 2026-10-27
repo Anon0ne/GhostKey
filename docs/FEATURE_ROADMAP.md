@@ -31,14 +31,14 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 
 | ID | Feature | Status | Owner/session | Branch / PR | Next step |
 | --- | --- | --- | --- | --- | --- |
-| F01 | Tabs and split panes | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F02 | Session logging | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F03 | SFTP file browser | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F04 | Port forwarding and jump hosts | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F05 | SSH agent and key manager | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F06 | Broadcast input | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F07 | Import PuTTY and SSH config sessions | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
-| F08 | Command snippets and button bar | Needs coordination | Unconfirmed | — | Check Claude's current implementation |
+| F01 | Tabs and split panes | In progress | Claude (v0.2 session) | `v0.2` / #6 | Implemented in #6; review and merge, then tag `v0.2.0`. Moving a pane to another tab is not done yet |
+| F02 | Session logging | In progress | Claude (v0.2 session) | `v0.2` / #6 | Implemented in #6; review and merge. Readable text only; raw logs and per-line timestamps not done |
+| F03 | SFTP file browser | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F07 | Import PuTTY and SSH config sessions | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F08 | Command snippets and button bar | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
 | F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
@@ -234,3 +234,41 @@ Copy this block into a dated entry below when starting or stopping work:
 - 2026-10-27 — Codex: initialized this shared backlog from the user's combined list.
   F01–F08 implementation status needs reconciliation with Claude's current session.
   No feature implementation or completion is claimed by this documentation change.
+- 2026-10-27 — Claude: reconciled F01–F08. Only F01 and F02 have work, on branch `v0.2`
+  (base eea8de2). F03–F08 have no code yet; Claude plans to take them after v0.2 in that
+  order, but they are not locked, so say so here before starting one.
+  - F02 done so far: `src-tauri/src/logging.rs` writes readable text (colors and cursor
+    movement removed, line edits applied, like PuTTY's "printable output") to
+    `<label>_<YYYY-MM-DD_HH-MM-SS>.log`, with `_2`, `_3` on collisions. Prompt answers never
+    pass through the output stream, so they are never logged. A disk error stops the log
+    and reports it without dropping SSH. `settings.rs` stores the log folder
+    (default `Documents/GhostKey Logs`). Saved sessions gain `autoLog`.
+  - Checks: cargo fmt, clippy `-D warnings`, cargo test including live sshd test (Linux).
+  - Files owned until v0.2 merges: `src/main.ts` (being split into connection, pane and
+    layout modules), `tests/connection.test.mjs` (porting to the new controller with the
+    same coverage), `src-tauri/src/{ssh,lib,logging,settings,sessions}.rs`, styles, index.html.
+  - Next: F01 frontend, logging UI, README/SPEC, bump to 0.2.0, then tag `v0.2.0` after merge.
+- 2026-10-27 — Claude: F01 and F02 implemented on `v0.2` (PR #6), version bumped to 0.2.0.
+  - F01: `src/connection.ts` (DOM-free connection lifecycle, Codex's stale-callback guards
+    kept), `src/pane.ts` (one xterm, banner, prompt set and Connection per pane),
+    `src/layout.ts` (pure split tree and directional focus), `src/main.ts` (tabs, toolbar
+    for the focused pane, shortcuts). Login dialogs name their session, switch to its pane
+    and are shown one at a time. Closing a pane or tab asks first when connected.
+    Not done: moving a pane between tabs or positions (drag and drop), restoring layouts
+    (F12).
+  - F02: the core follows each session's output all the time (`LineLog`), so a log
+    started after the prompt still records whole lines, including commands the shell
+    wrapped at the terminal width. Toolbar Start/Stop log, REC indicator, red tab dot,
+    Ctrl+Shift+L, per-session auto-log, and a Settings dialog for the folder. Readable
+    text only; header and footer carry timestamps, lines do not. Raw logs and per-line
+    timestamps are open, and should be designed with F14/F16.
+  - Checks (Linux): `npm test` 14 pass (connection lifecycle including the 6 Codex
+    reconnect cases, logging state, split layout); `npm run build`; cargo fmt, clippy
+    `-D warnings`, `cargo test` 23 pass including the live sshd test. Release build run
+    under Xvfb against a local sshd: splits, auto-log, close pane, new tab, Alt+1, and the
+    Settings dialog checked by hand. Windows: CI build only, not tested interactively.
+  - Known: a password dialog left open past the server's LoginGraceTime fails with
+    russh's "Unable to receive more messages from the channel"; a clearer message
+    belongs in F09.
+  - Next: merge #6, push tag `v0.2.0`. Then Claude intends to start F07 (imports) or F08
+    (snippets) unless someone claims them here first.
