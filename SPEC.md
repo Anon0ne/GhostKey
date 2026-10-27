@@ -2,6 +2,8 @@
 
 GhostKey is a stable, good-looking SSH client for Windows and Linux. It looks like the Kali Linux terminal and aims to cover what PuTTY and SecureCRT do. v1 covers the five features below. Everything else comes in later releases.
 
+For the shared expansion backlog and AI-to-AI handoff, see [docs/FEATURE_ROADMAP.md](docs/FEATURE_ROADMAP.md).
+
 ## Goals and v1 scope
 
 | Feature | v1 behavior |
