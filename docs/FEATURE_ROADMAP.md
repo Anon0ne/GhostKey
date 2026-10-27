@@ -31,8 +31,8 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 
 | ID | Feature | Status | Owner/session | Branch / PR | Next step |
 | --- | --- | --- | --- | --- | --- |
-| F01 | Tabs and split panes | In progress | Claude (v0.2 session) | `v0.2` | Frontend: per-pane terminal/connection controller, tab strip, split tree |
-| F02 | Session logging | In progress | Claude (v0.2 session) | `v0.2` | Rust capture done and tested; next: toolbar toggle, auto-log option, log folder setting |
+| F01 | Tabs and split panes | In progress | Claude (v0.2 session) | `v0.2` / #6 | Frontend: per-pane terminal/connection controller, tab strip, split tree |
+| F02 | Session logging | In progress | Claude (v0.2 session) | `v0.2` / #6 | Rust capture done and tested; next: toolbar toggle, auto-log option, log folder setting |
 | F03 | SFTP file browser | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
