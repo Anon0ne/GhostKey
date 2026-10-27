@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::hostkeys::{self, HostKeyStatus};
 use crate::links::{self, BannerLink};
+use crate::logging::SessionLog;
 use crate::secrets::{self, SecretKind};
 use crate::sessions::AuthMethod;
 
@@ -36,6 +37,12 @@ pub struct ConnectRequest {
     pub key_path: Option<String>,
     #[serde(default)]
     pub auto_open_tailscale: bool,
+    /// Start a session log as soon as the shell opens.
+    #[serde(default)]
+    pub log: bool,
+    /// Names the log file, usually the saved session's name.
+    #[serde(default)]
+    pub label: String,
     pub cols: u32,
     pub rows: u32,
 }
@@ -56,6 +63,11 @@ pub enum ConnEvent {
         prompt: Prompt,
     },
     Connected,
+    /// Logging started (`path` set), stopped (`path` empty), or failed (`error`).
+    Logging {
+        path: Option<String>,
+        error: Option<String>,
+    },
     Closed {
         error: Option<String>,
     },
@@ -128,6 +140,8 @@ impl Sinks {
 enum ConnCmd {
     Input(Vec<u8>),
     Resize(u32, u32),
+    StartLog,
+    StopLog,
     Close,
 }
 
@@ -142,16 +156,31 @@ pub struct Ssh {
     conns: Mutex<HashMap<u32, ConnEntry>>,
     prompts: Arc<Mutex<HashMap<u32, oneshot::Sender<PromptAnswer>>>>,
     known_hosts: PathBuf,
+    log_dir: Arc<Mutex<PathBuf>>,
 }
 
 impl Ssh {
-    pub fn new(known_hosts: PathBuf) -> Self {
+    pub fn new(known_hosts: PathBuf, log_dir: PathBuf) -> Self {
         Self {
             next_id: AtomicU32::new(1),
             conns: Mutex::new(HashMap::new()),
             prompts: Arc::new(Mutex::new(HashMap::new())),
             known_hosts,
+            log_dir: Arc::new(Mutex::new(log_dir)),
         }
+    }
+
+    /// New logs go here; logs already running keep their file.
+    pub fn set_log_dir(&self, dir: PathBuf) {
+        *self.log_dir.lock().unwrap() = dir;
+    }
+
+    pub fn start_log(&self, id: u32) {
+        self.send(id, ConnCmd::StartLog);
+    }
+
+    pub fn stop_log(&self, id: u32) {
+        self.send(id, ConnCmd::StopLog);
     }
 
     pub fn connect(self: &Arc<Self>, req: ConnectRequest, sinks: Sinks) -> u32 {
@@ -167,6 +196,7 @@ impl Ssh {
                 sinks: sinks.clone(),
             },
             known_hosts: self.known_hosts.clone(),
+            log_dir: self.log_dir.clone(),
         };
         let this = Arc::clone(self);
         // Hold the lock until the entry is in, so a fast failure can't try to
@@ -256,6 +286,7 @@ struct ConnCtx {
     sinks: Sinks,
     prompts: Prompter,
     known_hosts: PathBuf,
+    log_dir: Arc<Mutex<PathBuf>>,
 }
 
 impl ConnCtx {
@@ -263,6 +294,42 @@ impl ConnCtx {
         self.sinks.event(ConnEvent::Status {
             message: message.into(),
         });
+    }
+
+    fn start_log(&self) -> Option<SessionLog> {
+        let dir = self.log_dir.lock().unwrap().clone();
+        let label = if self.req.label.trim().is_empty() {
+            format!("{}@{}", self.req.username, self.req.host)
+        } else {
+            self.req.label.clone()
+        };
+        match SessionLog::create(&dir, &label, &self.req.host, self.req.port) {
+            Ok(log) => {
+                self.sinks.event(ConnEvent::Logging {
+                    path: Some(log.path().display().to_string()),
+                    error: None,
+                });
+                Some(log)
+            }
+            Err(e) => {
+                self.log_error(format!("Couldn't start the log in {}: {e}", dir.display()));
+                None
+            }
+        }
+    }
+
+    fn log_error(&self, error: String) {
+        self.sinks.event(ConnEvent::Logging {
+            path: None,
+            error: Some(error),
+        });
+    }
+}
+
+/// Closes a log, reporting a failure to write its last lines.
+fn finish_log(ctx: &ConnCtx, log: SessionLog) {
+    if let Err(e) = log.finish() {
+        ctx.log_error(format!("Couldn't finish the log: {e}"));
     }
 }
 
@@ -406,11 +473,18 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     channel.request_shell(true).await?;
     let (mut reader, writer) = channel.split();
     ctx.sinks.event(ConnEvent::Connected);
+    let mut log = if req.log { ctx.start_log() } else { None };
 
     loop {
         tokio::select! {
             msg = reader.wait() => match msg {
                 Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    if let Some(l) = log.as_mut() {
+                        if let Err(e) = l.write(&data) {
+                            log = None;
+                            ctx.log_error(format!("Logging stopped: {e}"));
+                        }
+                    }
                     (ctx.sinks.output)(data.to_vec());
                 }
                 Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::Eof) => {}
@@ -420,12 +494,26 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
             cmd = cmds.recv() => match cmd {
                 Some(ConnCmd::Input(data)) => writer.data_bytes(data).await?,
                 Some(ConnCmd::Resize(cols, rows)) => writer.window_change(cols, rows, 0, 0).await?,
+                Some(ConnCmd::StartLog) => {
+                    if log.is_none() {
+                        log = ctx.start_log();
+                    }
+                }
+                Some(ConnCmd::StopLog) => {
+                    if let Some(l) = log.take() {
+                        finish_log(&ctx, l);
+                        ctx.sinks.event(ConnEvent::Logging { path: None, error: None });
+                    }
+                }
                 Some(ConnCmd::Close) | None => {
                     let _ = writer.close().await;
                     break;
                 }
             },
         }
+    }
+    if let Some(l) = log.take() {
+        finish_log(&ctx, l);
     }
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(())
@@ -709,6 +797,8 @@ mod live {
             auth,
             key_path: Some(env.key.clone()),
             auto_open_tailscale: true,
+            log: auth == AuthMethod::Password,
+            label: "live test".into(),
             cols: 80,
             rows: 24,
         };
@@ -760,6 +850,20 @@ mod live {
         }
     }
 
+    /// Waits for the first log in `dir` to be closed, then returns its text.
+    async fn wait_for_log(dir: &std::path::Path) -> String {
+        for _ in 0..50 {
+            if let Some(Ok(entry)) = std::fs::read_dir(dir).ok().and_then(|mut d| d.next()) {
+                let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                if text.contains("=== log closed") {
+                    return text;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("no finished log in {}", dir.display());
+    }
+
     fn yes(values: &[&str]) -> PromptAnswer {
         PromptAnswer {
             accept: true,
@@ -776,7 +880,8 @@ mod live {
         };
         let dir = tempfile::tempdir().unwrap();
         let known_hosts = dir.path().join("known_hosts");
-        let ssh = Arc::new(Ssh::new(known_hosts.clone()));
+        let log_dir = dir.path().join("logs");
+        let ssh = Arc::new(Ssh::new(known_hosts.clone(), log_dir.clone()));
         let opened = Arc::new(StdMutex::new(Vec::new()));
 
         // 1. New host: trust prompt, then password. The banner's Tailscale link
@@ -809,6 +914,15 @@ mod live {
         ssh.input(id, b"stty size\n".to_vec());
         expect_output(&mut rx, "40 120").await;
         ssh.close(id);
+
+        // The session was logged (password sessions log in this test) as
+        // plain text, closed with a footer.
+        let log_text = wait_for_log(&log_dir).await;
+        assert!(log_text.contains("GK_42"), "{log_text}");
+        assert!(
+            !log_text.contains('\x1b'),
+            "escape codes in log: {log_text:?}"
+        );
 
         // 2. Known host now: no trust prompt. A wrong password re-prompts,
         //    and cancelling ends the connection with an error.

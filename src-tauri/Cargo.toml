@@ -28,6 +28,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 log = "0.4"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+vte = "0.14"
 
 [dev-dependencies]
 tempfile = "3"
