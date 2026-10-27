@@ -14,7 +14,8 @@
           <span class="badge">alpha</span>
         </div>
         <form id="quick-connect" autocomplete="off">
-          <input id="quick-input" placeholder="Quick connect: user@host:port" spellcheck="false" />
+          <input id="quick-input" aria-label="Connection address" placeholder="Quick connect: user@host:port" spellcheck="false" />
+          <button class="btn primary" type="submit">Connect</button>
         </form>
         <div class="sidebar-row">
           <input id="search" placeholder="Search sessions" spellcheck="false" />
@@ -28,6 +29,7 @@
           <span id="conn-title">Not connected</span>
           <span id="conn-status"></span>
           <span class="spacer"></span>
+          <button id="reconnect" class="btn primary" hidden>Retry connection</button>
           <button id="disconnect" class="btn" hidden>Disconnect</button>
         </header>
         <section id="banner" hidden>
