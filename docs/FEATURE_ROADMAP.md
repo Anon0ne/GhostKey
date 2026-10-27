@@ -33,12 +33,12 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | --- | --- | --- | --- | --- | --- |
 | F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
-| F03 | SFTP file browser | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F03 | SFTP file browser | In progress | Claude | `sftp` | Started 2026-10-27 |
 | F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
-| F08 | Command snippets and button bar | In progress | Claude | `snippets` (#9) | Implemented and joined to the F15 paste rules; awaiting merge. Placeholders not done |
+| F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
 | F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
@@ -331,3 +331,6 @@ Copy this block into a dated entry below when starting or stopping work:
     `Pane.sendText(text, enter, bound)` drops the send if they changed, the same rule
     as `Pane.pasteText`. Snippets don't call `pasteText` because that would review twice.
   - F06 broadcast must still add its own multi-destination approval.
+- 2026-10-27 — Claude: #9 merged (F08 Done). Started F03 (SFTP browser) on `sftp` from
+  d1e7d9f. Plans to own `src-tauri/src/sftp.rs` (new), `src/sftp.ts` (new) and a file
+  panel beside the terminal; it reuses the session's SSH connection, so no second login.
