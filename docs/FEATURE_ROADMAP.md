@@ -37,7 +37,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
-| F07 | Import PuTTY and SSH config sessions | In progress | Claude | `f07-import` | Parsers for ~/.ssh/config and PuTTY sessions, then preview dialog |
+| F07 | Import PuTTY and SSH config sessions | In progress | Claude | `f07-import` | Implemented; awaiting review and merge. PuTTY registry path checked by compile only |
 | F08 | Command snippets and button bar | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
@@ -276,3 +276,16 @@ Copy this block into a dated entry below when starting or stopping work:
   Tag `v0.2.0` still needs pushing by a person: this session's GitHub access can't create
   tags. Started F07 on branch `f07-import` from a7167f1. Owns `src-tauri/src/import.rs`
   (new) and an import dialog in the frontend.
+- 2026-10-27 — Claude: Justin pushed tag `v0.2.0`; the release built and he tested it on
+  Linux. F07 implemented on `f07-import`.
+  - `src-tauri/src/import.rs` reads ~/.ssh/config (Include with wildcards and a depth limit
+    of 16, first-value-wins, `Host *`, negated patterns, `%` tokens) and PuTTY sessions
+    (registry via `winreg` on Windows, `~/.putty/sessions` elsewhere). It never executes
+    anything: ProxyCommand, ProxyJump, Match, forwards and other settings are reported
+    per session. `src/importPlan.ts` holds the duplicate rules (skip by default, update
+    keeps id/name/folder/options, add gives a unique name); the dialog lives in `main.ts`.
+  - Checks (Linux): 35 Rust tests (12 import), 22 frontend tests (8 import); real app
+    imported 3 sessions from a sample config and PuTTY folder, skipped a duplicate, and
+    listed a telnet session as skipped. The Windows registry reader was compiled for
+    `x86_64-pc-windows-gnu` in isolation but not run on Windows.
+  - Next: Claude plans F08 (snippets) after this merges.

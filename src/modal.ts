@@ -38,13 +38,15 @@ export function showModal<T>(opts: {
   buttons: ModalButton<T>[];
   onDismiss: () => T;
   validate?: () => string | null;
+  /** A wider dialog, for lists. */
+  wide?: boolean;
 }): { result: Promise<T>; close: () => void } {
   const root = document.getElementById("modal-root")!;
   const error = el("p", { class: "modal-error", role: "alert" });
   const footer = el("div", { class: "modal-buttons" });
   const dialog = el(
     "div",
-    { class: "modal", role: "dialog", "aria-modal": "true", "aria-label": opts.title },
+    { class: opts.wide ? "modal wide" : "modal", role: "dialog", "aria-modal": "true", "aria-label": opts.title },
     el("h2", { text: opts.title }),
     ...opts.body,
     error,

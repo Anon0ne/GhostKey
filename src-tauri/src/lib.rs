@@ -1,4 +1,5 @@
 mod hostkeys;
+mod import;
 mod links;
 mod logging;
 mod secrets;
@@ -163,6 +164,18 @@ fn open_log_dir(app: AppHandle, settings: State<'_, SettingsState>) -> CmdResult
         .map_err(err)
 }
 
+/// Finds sessions in ~/.ssh/config and PuTTY. Reads only; runs nothing.
+#[tauri::command]
+async fn scan_imports() -> import::Scan {
+    import::scan_default(&import::Env::current())
+}
+
+/// Finds sessions in an OpenSSH config file the user chose.
+#[tauri::command]
+async fn scan_ssh_config(path: String) -> import::Scan {
+    import::scan_file(std::path::Path::new(&path), &import::Env::current())
+}
+
 fn config_dir(app: &AppHandle) -> PathBuf {
     app.path()
         .app_config_dir()
@@ -204,6 +217,8 @@ pub fn run() {
             get_log_dir,
             set_log_dir,
             open_log_dir,
+            scan_imports,
+            scan_ssh_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GhostKey");
