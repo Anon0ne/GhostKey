@@ -274,6 +274,9 @@ function shortcut(e: KeyboardEvent): boolean {
   }
   if (mod && e.shiftKey && !e.altKey) {
     switch (e.code) {
+      case "KeyF":
+        activePane().openSearch();
+        return true;
       case "KeyT":
         newTab();
         return true;
@@ -732,6 +735,7 @@ $("new-tab").addEventListener("click", () => newTab());
 $("disconnect").addEventListener("click", () => activePane().conn.disconnect());
 $("reconnect").addEventListener("click", () => activePane().conn.retry());
 $("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
+$("terminal-find").addEventListener("click", () => activePane().openSearch());
 $("split-right").addEventListener("click", () => splitPane("row"));
 $("split-down").addEventListener("click", () => splitPane("column"));
 

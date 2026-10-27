@@ -748,3 +748,23 @@ input.invalid {
   color: var(--green);
   word-break: break-all;
 }
+
+/* Per-pane scrollback search and paste review. Search terms stay in memory. */
+.terminal-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: var(--panel);
+}
+.terminal-search input { flex: 1; min-width: 100px; }
+.terminal-search [role="status"] { font-size: 12px; }
+.paste-preview {
+  max-height: 45vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  user-select: text;
+}
