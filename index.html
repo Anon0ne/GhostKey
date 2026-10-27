@@ -12,6 +12,8 @@
           <img src="/ghostkey.svg" alt="" width="22" height="22" />
           <span>GhostKey</span>
           <span class="badge">alpha</span>
+          <span class="spacer"></span>
+          <button id="settings" class="row-btn" title="Settings">⚙</button>
         </div>
         <form id="quick-connect" autocomplete="off">
           <input id="quick-input" aria-label="Connection address" placeholder="Quick connect: user@host:port" spellcheck="false" />
@@ -24,24 +26,23 @@
         <nav id="session-list"></nav>
       </aside>
       <main id="main">
+        <nav id="tabbar">
+          <div id="tabs" role="tablist"></div>
+          <button id="new-tab" class="tab-add" title="New tab (Ctrl+Shift+T)">+</button>
+        </nav>
         <header id="toolbar">
           <span id="status-dot" class="dot"></span>
           <span id="conn-title">Not connected</span>
           <span id="conn-status"></span>
+          <span id="log-indicator" class="rec" hidden>● REC</span>
           <span class="spacer"></span>
           <button id="reconnect" class="btn primary" hidden>Retry connection</button>
           <button id="disconnect" class="btn" hidden>Disconnect</button>
+          <button id="log-toggle" class="btn" title="Log this session to a file (Ctrl+Shift+L)" hidden>Start log</button>
+          <button id="split-right" class="icon-btn" title="Split right (Ctrl+Shift+R)">◫</button>
+          <button id="split-down" class="icon-btn" title="Split down (Ctrl+Shift+D)">⬓</button>
         </header>
-        <section id="banner" hidden>
-          <pre id="banner-text"></pre>
-          <div id="banner-links"></div>
-          <div id="banner-wait" hidden>
-            <span class="spinner"></span>
-            <span>Waiting for Tailscale approval in your browser…</span>
-            <button id="banner-cancel" class="btn">Cancel</button>
-          </div>
-        </section>
-        <div id="terminal"></div>
+        <div id="workspace"></div>
       </main>
     </div>
     <div id="modal-root"></div>

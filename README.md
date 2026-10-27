@@ -2,7 +2,7 @@
 
 A modern SSH client for Windows and Linux that looks like the Kali Linux terminal.
 
-![GhostKey connected to a Kali box](docs/screenshots/connected.png)
+![GhostKey with two panes side by side, one of them logging](docs/screenshots/split-panes.png)
 
 > **Status: alpha.** It works for everyday logins, but expect rough edges. Please report anything odd.
 
@@ -13,6 +13,8 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **Host-key checks:** you confirm a new server's fingerprint once. If a known server's key changes, GhostKey blocks the connection and warns you.
 - **Saved sessions:** sorted into folders, with search. Passwords are stored in your system keychain (Windows Credential Manager, or GNOME Keyring / KWallet on Linux), never in a file.
 - **Tailscale SSH:** when a server in check mode sends a sign-in link, GhostKey shows it with an **Open in browser** button and waits for you to approve. You can set it to open the link automatically for each session.
+- **Tabs and split panes (new in 0.2):** open as many sessions as you like in tabs, and split any tab side by side or top and bottom. Each pane has its own connection and Reconnect button. Splitting a connected pane opens a second shell on the same server.
+- **Session logging (new in 0.2):** save what a session prints to a timestamped text file, with colors removed. Start and stop it from the toolbar, or set a saved session to log automatically. Choose the folder in Settings (⚙).
 
 | Tailscale sign-in | New host key | Session editor |
 | --- | --- | --- |
@@ -27,12 +29,18 @@ Every push builds installers in GitHub Actions. Open the latest **CI** run on th
 
 The Windows installers aren't code-signed yet, so SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
-Tagged releases (`v0.1.0-alpha.1` and so on) are published as draft pre-releases on the [Releases page](../../releases).
+Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the [Releases page](../../releases).
 
 ## Keyboard shortcuts
 
 | Keys | Action |
 | --- | --- |
+| Ctrl+Shift+T | New tab |
+| Ctrl+Shift+W | Close the focused pane |
+| Ctrl+Shift+R / Ctrl+Shift+D | Split right / split down |
+| Alt+Arrow keys | Move between panes |
+| Alt+1 … Alt+9, Ctrl+PgUp / Ctrl+PgDn | Switch tabs |
+| Ctrl+Shift+L | Start or stop logging |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
 | Right-click | Copy the selection, or paste when nothing is selected |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Bigger / smaller / default font size |
@@ -45,6 +53,8 @@ Tagged releases (`v0.1.0-alpha.1` and so on) are published as draft pre-releases
 | Saved sessions | `sessions.json` in the app config folder (`%APPDATA%\com.anon0ne.ghostkey` on Windows, `~/.config/com.anon0ne.ghostkey` on Linux) |
 | Trusted host keys | `known_hosts` in the same folder (OpenSSH format) |
 | Passwords and passphrases | Your system keychain, under the service name "GhostKey" |
+| Settings | `settings.json` in the app config folder |
+| Session logs | `Documents/GhostKey Logs` unless you pick another folder in Settings. Logs hold everything the server printed, which can include secrets |
 
 ## Building from source
 
@@ -65,8 +75,8 @@ npm run tauri build    # build installers into src-tauri/target/release/bundle
 ### Tests
 
 ```sh
-cd src-tauri
-cargo test
+npm test                   # frontend: connection lifecycle and split layout
+cd src-tauri && cargo test # Rust core
 ```
 
 The live SSH tests run against a real OpenSSH server. To run them locally, start the throwaway server with `sudo scripts/test-sshd.sh /tmp/gk-sshd`, export the variables it prints, then run `cargo test`.

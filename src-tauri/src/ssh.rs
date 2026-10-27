@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::hostkeys::{self, HostKeyStatus};
 use crate::links::{self, BannerLink};
-use crate::logging::SessionLog;
+use crate::logging::LineLog;
 use crate::secrets::{self, SecretKind};
 use crate::sessions::AuthMethod;
 
@@ -296,25 +296,19 @@ impl ConnCtx {
         });
     }
 
-    fn start_log(&self) -> Option<SessionLog> {
+    fn start_log(&self, log: &mut LineLog) {
         let dir = self.log_dir.lock().unwrap().clone();
         let label = if self.req.label.trim().is_empty() {
             format!("{}@{}", self.req.username, self.req.host)
         } else {
             self.req.label.clone()
         };
-        match SessionLog::create(&dir, &label, &self.req.host, self.req.port) {
-            Ok(log) => {
-                self.sinks.event(ConnEvent::Logging {
-                    path: Some(log.path().display().to_string()),
-                    error: None,
-                });
-                Some(log)
-            }
-            Err(e) => {
-                self.log_error(format!("Couldn't start the log in {}: {e}", dir.display()));
-                None
-            }
+        match log.start(&dir, &label, &self.req.host, self.req.port) {
+            Ok(path) => self.sinks.event(ConnEvent::Logging {
+                path: Some(path.display().to_string()),
+                error: None,
+            }),
+            Err(e) => self.log_error(format!("Couldn't start the log in {}: {e}", dir.display())),
         }
     }
 
@@ -327,9 +321,16 @@ impl ConnCtx {
 }
 
 /// Closes a log, reporting a failure to write its last lines.
-fn finish_log(ctx: &ConnCtx, log: SessionLog) {
-    if let Err(e) = log.finish() {
-        ctx.log_error(format!("Couldn't finish the log: {e}"));
+fn stop_log(ctx: &ConnCtx, log: &mut LineLog) {
+    if log.path().is_none() {
+        return;
+    }
+    match log.stop() {
+        Ok(()) => ctx.sinks.event(ConnEvent::Logging {
+            path: None,
+            error: None,
+        }),
+        Err(e) => ctx.log_error(format!("Couldn't finish the log: {e}")),
     }
 }
 
@@ -473,17 +474,18 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     channel.request_shell(true).await?;
     let (mut reader, writer) = channel.split();
     ctx.sinks.event(ConnEvent::Connected);
-    let mut log = if req.log { ctx.start_log() } else { None };
+    let mut log = LineLog::default();
+    log.set_width(req.cols as usize);
+    if req.log {
+        ctx.start_log(&mut log);
+    }
 
     loop {
         tokio::select! {
             msg = reader.wait() => match msg {
                 Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                    if let Some(l) = log.as_mut() {
-                        if let Err(e) = l.write(&data) {
-                            log = None;
-                            ctx.log_error(format!("Logging stopped: {e}"));
-                        }
+                    if let Err(e) = log.feed(&data) {
+                        ctx.log_error(format!("Logging stopped: {e}"));
                     }
                     (ctx.sinks.output)(data.to_vec());
                 }
@@ -493,18 +495,12 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
             },
             cmd = cmds.recv() => match cmd {
                 Some(ConnCmd::Input(data)) => writer.data_bytes(data).await?,
-                Some(ConnCmd::Resize(cols, rows)) => writer.window_change(cols, rows, 0, 0).await?,
-                Some(ConnCmd::StartLog) => {
-                    if log.is_none() {
-                        log = ctx.start_log();
-                    }
+                Some(ConnCmd::Resize(cols, rows)) => {
+                    log.set_width(cols as usize);
+                    writer.window_change(cols, rows, 0, 0).await?
                 }
-                Some(ConnCmd::StopLog) => {
-                    if let Some(l) = log.take() {
-                        finish_log(&ctx, l);
-                        ctx.sinks.event(ConnEvent::Logging { path: None, error: None });
-                    }
-                }
+                Some(ConnCmd::StartLog) => ctx.start_log(&mut log),
+                Some(ConnCmd::StopLog) => stop_log(&ctx, &mut log),
                 Some(ConnCmd::Close) | None => {
                     let _ = writer.close().await;
                     break;
@@ -512,9 +508,7 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
             },
         }
     }
-    if let Some(l) = log.take() {
-        finish_log(&ctx, l);
-    }
+    stop_log(&ctx, &mut log);
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(())
 }

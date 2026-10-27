@@ -3,24 +3,14 @@ import "@fontsource/fira-code/700.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 
-import { api, type BannerLink, type ConnEvent, type ConnectRequest, type Prompt, type PromptAnswer, type SavedSession } from "./api";
+import { api, type SavedSession } from "./api";
+import { ansi, type BaseRequest } from "./connection";
+import { clampRatio, leaf, nearest, panes, remove, split, type Dir, type Direction, type LayoutNode } from "./layout";
 import { checkbox, confirm, el, field, showModal } from "./modal";
-import { DEFAULT_FONT_SIZE, FONT_FAMILY, kaliDark } from "./theme";
-
-// ANSI helpers in Kali-Dark colors, for GhostKey's own messages in the terminal.
-const ansi = {
-  info: (s: string) => `\x1b[1;34m${s}\x1b[0m`,
-  dim: (s: string) => `\x1b[90m${s}\x1b[0m`,
-  ok: (s: string) => `\x1b[32m${s}\x1b[0m`,
-  warn: (s: string) => `\x1b[33m${s}\x1b[0m`,
-  err: (s: string) => `\x1b[1;31m${s}\x1b[0m`,
-};
+import { Pane, type PaneHost } from "./pane";
+import { DEFAULT_FONT_SIZE } from "./theme";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -40,275 +30,329 @@ function savePref(key: string, value: string) {
   }
 }
 
-// ---------------------------------------------------------------- terminal
-
-const term = new Terminal({
-  theme: kaliDark,
-  fontFamily: FONT_FAMILY,
-  fontSize: Number(loadPref("fontSize", String(DEFAULT_FONT_SIZE))) || DEFAULT_FONT_SIZE,
-  fontWeight: "normal",
-  fontWeightBold: "bold",
-  cursorBlink: true,
-  scrollback: 10000,
-  allowProposedApi: false,
-});
-const fit = new FitAddon();
-term.loadAddon(fit);
-term.loadAddon(
-  new WebLinksAddon((event, uri) => {
-    // Ctrl/Cmd+click opens links, as in most terminals.
-    if (event.ctrlKey || event.metaKey) {
-      api.openLink(uri).catch((e) => term.writeln(`\r\n${ansi.err(String(e))}`));
-    }
-  }),
-);
-
-// ---------------------------------------------------------------- state
-
-interface Connection {
-  gen: number;
-  request: Omit<ConnectRequest, "cols" | "rows">;
-  id: number | null;
-  title: string;
-  connected: boolean;
-  closed: boolean;
-}
-
 let sessions: SavedSession[] = [];
-let conn: Connection | null = null;
-let gen = 0;
-const openPrompts = new Set<() => void>();
+let fontSize = Number(loadPref("fontSize", String(DEFAULT_FONT_SIZE))) || DEFAULT_FONT_SIZE;
 
-function setStatus(state: "idle" | "busy" | "online" | "error", title: string, status = "") {
-  $("status-dot").className = `dot ${state}`;
-  $("conn-title").textContent = title;
-  $("conn-status").textContent = status;
-  const active = !!conn && !conn.closed;
-  const disconnectButton = $<HTMLButtonElement>("disconnect");
-  disconnectButton.hidden = !active;
-  disconnectButton.textContent = conn?.connected ? "Disconnect" : "Cancel";
-  const retryButton = $<HTMLButtonElement>("reconnect");
-  retryButton.hidden = !conn || active;
-  retryButton.textContent = conn?.connected ? "Reconnect" : "Retry connection";
+// ---------------------------------------------------------------- tabs and panes
+
+interface Tab {
+  root: LayoutNode<Pane>;
+  active: Pane;
+  el: HTMLElement;
 }
 
-function welcome() {
-  term.reset();
-  term.writeln(ansi.info("  GhostKey") + ansi.dim("  alpha"));
-  term.writeln("");
-  term.writeln("  Double-click a saved session, or type " + ansi.ok("user@host") + " in Quick connect.");
-  term.writeln(ansi.dim("  Ctrl+Shift+C / Ctrl+Shift+V copy and paste. Ctrl+= and Ctrl+- change the font size."));
-  term.writeln("");
+const tabs: Tab[] = [];
+let current: Tab;
+
+const host: PaneHost = {
+  fontSize: () => fontSize,
+  activate: (pane) => focusPane(pane, false),
+  changed: (pane) => {
+    renderTabs();
+    if (pane === activePane()) renderToolbar();
+  },
+  shortcut: (_pane, e) => shortcut(e),
+};
+
+function activePane(): Pane {
+  return current.active;
 }
 
-// ---------------------------------------------------------------- connecting
+function tabOf(pane: Pane): Tab | undefined {
+  return tabs.find((t) => panes(t.root).includes(pane));
+}
 
-async function connectTo(req: Omit<ConnectRequest, "cols" | "rows">, title: string) {
-  if (conn && !conn.closed) {
-    const ok = await confirm("Disconnect?", `You're connected to ${conn.title}. Disconnect and connect to ${title}?`, "Disconnect");
+function newTab(): Pane {
+  const pane = new Pane(host);
+  const tab: Tab = { root: leaf(pane), active: pane, el: el("div", { class: "tab-body", hidden: true }) };
+  $("workspace").append(tab.el);
+  tabs.push(tab);
+  renderLayout(tab);
+  selectTab(tab);
+  pane.welcome();
+  return pane;
+}
+
+function selectTab(tab: Tab) {
+  current = tab;
+  for (const t of tabs) t.el.hidden = t !== tab;
+  // Background tabs measure as zero, so fit once this one is visible.
+  requestAnimationFrame(() => panes(tab.root).forEach((p) => p.fit()));
+  renderTabs();
+  renderToolbar();
+  tab.active.focus();
+}
+
+/** Makes `pane` the active one, switching tabs if needed. */
+function focusPane(pane: Pane, focus = true) {
+  const tab = tabOf(pane);
+  if (!tab) return;
+  const changed = tab.active !== pane;
+  tab.active = pane;
+  if (tab !== current) selectTab(tab);
+  else if (changed) {
+    renderTabs();
+    renderToolbar();
+  }
+  for (const p of panes(tab.root)) p.el.classList.toggle("active", p === pane);
+  if (focus) pane.focus();
+}
+
+/** Builds a tab's split tree as nested flex boxes. Panes keep their elements. */
+function renderLayout(tab: Tab) {
+  const build = (node: LayoutNode<Pane>, flex: number): HTMLElement => {
+    if (node.kind === "leaf") {
+      node.pane.el.style.flex = `${flex} 1 0px`;
+      return node.pane.el;
+    }
+    const box = el("div", { class: `split ${node.dir}` });
+    box.style.flex = `${flex} 1 0px`;
+    const a = build(node.a, node.ratio);
+    const b = build(node.b, 1 - node.ratio);
+    const gutter = el("div", { class: "gutter", role: "separator" });
+    gutter.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      gutter.setPointerCapture(e.pointerId);
+      const rect = box.getBoundingClientRect();
+      const move = (ev: PointerEvent) => {
+        const ratio = node.dir === "row" ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
+        node.ratio = clampRatio(ratio);
+        a.style.flex = `${node.ratio} 1 0px`;
+        b.style.flex = `${1 - node.ratio} 1 0px`;
+      };
+      const up = () => {
+        gutter.removeEventListener("pointermove", move);
+        gutter.removeEventListener("pointerup", up);
+        gutter.focus();
+      };
+      gutter.addEventListener("pointermove", move);
+      gutter.addEventListener("pointerup", up);
+    });
+    box.append(a, gutter, b);
+    return box;
+  };
+  tab.el.replaceChildren(build(tab.root, 1));
+  const all = panes(tab.root);
+  tab.el.classList.toggle("multi", all.length > 1);
+  for (const p of all) p.el.classList.toggle("active", p === tab.active);
+  requestAnimationFrame(() => all.forEach((p) => p.fit()));
+}
+
+function splitPane(dir: Dir) {
+  const tab = current;
+  const from = tab.active;
+  const pane = new Pane(host);
+  tab.root = split(tab.root, from, pane, dir);
+  renderLayout(tab);
+  focusPane(pane);
+  // A split opens another shell on the same server, like QTerminal and SecureCRT.
+  if (from.conn.request) {
+    const req = from.conn.request;
+    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false }, from.conn.title));
+  } else {
+    pane.welcome();
+  }
+}
+
+async function closePane(pane: Pane) {
+  const tab = tabOf(pane);
+  if (!tab) return;
+  if (pane.conn.active) {
+    const ok = await confirm("Close this session?", `You're connected to ${pane.conn.title}. Disconnect and close it?`, "Close", true);
     if (!ok) return;
-    disconnect();
   }
-  const myGen = ++gen;
-  conn = { gen: myGen, request: { ...req }, id: null, title, connected: false, closed: false };
-  term.reset();
-  hideBanner();
-  fit.fit();
-  setStatus("busy", title, "Connecting…");
-  term.focus();
+  const root = remove(tab.root, pane);
+  pane.dispose();
+  if (!root) {
+    removeTab(tab);
+    return;
+  }
+  tab.root = root;
+  if (tab.active === pane) tab.active = panes(root)[0];
+  renderLayout(tab);
+  if (tab === current) {
+    focusPane(tab.active);
+    renderToolbar();
+  }
+  renderTabs();
+}
 
-  const full: ConnectRequest = { ...req, cols: term.cols, rows: term.rows };
-  try {
-    const id = await api.connect(
-      full,
-      (e) => {
-        if (conn?.gen === myGen && !conn.closed) onConnEvent(e);
-      },
-      (data) => {
-        if (conn?.gen === myGen && !conn.closed) term.write(data);
-      },
+async function closeTab(tab: Tab) {
+  const live = panes(tab.root).filter((p) => p.conn.active);
+  if (live.length) {
+    const names = live.map((p) => p.conn.title).join(", ");
+    const ok = await confirm("Close this tab?", `This tab has ${live.length === 1 ? "an open session" : `${live.length} open sessions`} (${names}). Disconnect and close it?`, "Close", true);
+    if (!ok) return;
+  }
+  panes(tab.root).forEach((p) => p.dispose());
+  removeTab(tab);
+}
+
+function removeTab(tab: Tab) {
+  const i = tabs.indexOf(tab);
+  tabs.splice(i, 1);
+  tab.el.remove();
+  if (tabs.length === 0) newTab();
+  else if (tab === current) selectTab(tabs[Math.min(i, tabs.length - 1)]);
+  else renderTabs();
+}
+
+function moveFocus(dir: Direction) {
+  const all = panes(current.root);
+  const rects = all.map((p) => p.el.getBoundingClientRect());
+  const next = nearest(rects, all.indexOf(current.active), dir);
+  if (next !== null) focusPane(all[next]);
+}
+
+/** Opens a session in the active pane when it is free, otherwise in a new tab. */
+function openSession(req: BaseRequest, title: string) {
+  const pane = activePane().conn.active ? newTab() : activePane();
+  pane.conn.connect(req, title);
+}
+
+function renderTabs() {
+  const strip = $("tabs");
+  strip.replaceChildren();
+  for (const tab of tabs) {
+    const all = panes(tab.root);
+    const p = tab.active;
+    const recording = all.some((x) => x.conn.logPath);
+    const close = el("button", { class: "tab-close", type: "button", title: "Close tab", text: "✕" });
+    close.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeTab(tab);
+    });
+    const node = el(
+      "div",
+      { class: `tab${tab === current ? " current" : ""}`, role: "tab", "aria-selected": String(tab === current), title: p.title },
+      el("span", { class: `dot ${p.conn.state}` }),
+      el("span", { class: "tab-title", text: p.title }),
+      all.length > 1 ? el("span", { class: "tab-count", text: String(all.length) }) : null,
+      recording ? el("span", { class: "tab-rec", title: "Logging", text: "●" }) : null,
+      close,
     );
-    if (conn?.gen !== myGen || conn.closed) {
-      await api.disconnect(id);
-      return;
+    node.addEventListener("click", () => selectTab(tab));
+    node.addEventListener("auxclick", (e) => {
+      if (e.button === 1) closeTab(tab);
+    });
+    strip.append(node);
+  }
+}
+
+function renderToolbar() {
+  const conn = activePane().conn;
+  $("status-dot").className = `dot ${conn.state}`;
+  $("conn-title").textContent = conn.request ? conn.title : "Not connected";
+  $("conn-status").textContent = conn.status;
+  const stop = $<HTMLButtonElement>("disconnect");
+  stop.hidden = !conn.active;
+  stop.textContent = conn.stopLabel;
+  const retry = $<HTMLButtonElement>("reconnect");
+  retry.hidden = !conn.canRetry;
+  retry.textContent = conn.retryLabel;
+  const log = $<HTMLButtonElement>("log-toggle");
+  log.hidden = !conn.online;
+  log.textContent = conn.logPath ? "Stop log" : "Start log";
+  const rec = $("log-indicator");
+  rec.hidden = !conn.logPath;
+  rec.title = conn.logPath ? `Logging to ${conn.logPath}` : "";
+}
+
+function shortcut(e: KeyboardEvent): boolean {
+  const mod = e.ctrlKey || e.metaKey;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (mod && !e.shiftKey && !e.altKey) {
+    if (key === "=" || key === "+") return setFontSize(fontSize + 1);
+    if (key === "-") return setFontSize(fontSize - 1);
+    if (key === "0") return setFontSize(DEFAULT_FONT_SIZE);
+    if (key === "PageUp" || key === "PageDown") {
+      const i = tabs.indexOf(current) + (key === "PageUp" ? -1 : 1);
+      selectTab(tabs[(i + tabs.length) % tabs.length]);
+      return true;
     }
-    conn.id = id;
-    if (conn.connected) api.resize(id, term.cols, term.rows);
+  }
+  if (mod && e.shiftKey && !e.altKey) {
+    switch (e.code) {
+      case "KeyT":
+        newTab();
+        return true;
+      case "KeyW":
+        closePane(activePane());
+        return true;
+      case "KeyR":
+        splitPane("row");
+        return true;
+      case "KeyD":
+        splitPane("column");
+        return true;
+      case "KeyL":
+        activePane().conn.toggleLog();
+        return true;
+    }
+  }
+  if (e.altKey && !mod && !e.shiftKey) {
+    const arrows: Record<string, Direction> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+    if (arrows[e.key]) {
+      moveFocus(arrows[e.key]);
+      return true;
+    }
+    const n = /^Digit([1-9])$/.exec(e.code);
+    if (n && tabs[Number(n[1]) - 1]) {
+      selectTab(tabs[Number(n[1]) - 1]);
+      return true;
+    }
+  }
+  return false;
+}
+
+function setFontSize(size: number): true {
+  fontSize = Math.max(9, Math.min(32, size));
+  savePref("fontSize", String(fontSize));
+  for (const tab of tabs) panes(tab.root).forEach((p) => p.setFontSize(fontSize));
+  return true;
+}
+
+// ---------------------------------------------------------------- settings
+
+async function openSettings() {
+  let dir = await api.getLogDir().catch((e) => String(e));
+  let reset = false;
+  const path = el("input", { value: dir, readonly: true, spellcheck: "false" });
+  const browse = el("button", { class: "btn", type: "button", text: "Change…" });
+  browse.addEventListener("click", async () => {
+    const picked = await openFileDialog({ directory: true, multiple: false, title: "Choose a folder for session logs", defaultPath: dir });
+    if (typeof picked === "string") {
+      dir = picked;
+      reset = false;
+      path.value = picked;
+    }
+  });
+  const resetBtn = el("button", { class: "link-btn", type: "button", text: "Use the default folder" });
+  resetBtn.addEventListener("click", () => {
+    reset = true;
+    path.value = "Default (Documents/GhostKey Logs)";
+  });
+  const openBtn = el("button", { class: "link-btn", type: "button", text: "Open the log folder" });
+  openBtn.addEventListener("click", () => api.openLogDir().catch((e) => confirm("Couldn't open the folder", String(e), "OK")));
+
+  const choice = await showModal<boolean>({
+    title: "Settings",
+    body: [
+      field("Session log folder", el("div", { class: "inline" }, path, browse), "Logs are plain text with colors removed. They hold everything the server prints, which can include secrets."),
+      el("div", { class: "inline links" }, resetBtn, openBtn),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+  }).result;
+  if (!choice) return;
+  try {
+    await api.setLogDir(reset ? null : dir);
   } catch (e) {
-    if (conn?.gen !== myGen || conn.closed) return;
-    closePrompts();
-    hideBanner();
-    term.writeln(ansi.err(`Couldn't start the connection: ${e}`));
-    if (conn?.gen === myGen) conn.closed = true;
-    setStatus("error", title, "Failed");
+    await confirm("Couldn't save settings", String(e), "OK");
   }
-}
-
-function disconnect() {
-  if (!conn || conn.closed) return;
-  conn.closed = true;
-  if (conn.id !== null) api.disconnect(conn.id);
-  closePrompts();
-  hideBanner();
-  term.writeln(`\r\n${ansi.dim("Disconnected.")}`);
-  setStatus("idle", conn.title, "Disconnected");
-}
-
-function onConnEvent(e: ConnEvent) {
-  if (!conn) return;
-  switch (e.type) {
-    case "status":
-      setStatus("busy", conn.title, e.message);
-      term.writeln(ansi.dim(e.message));
-      break;
-    case "banner":
-      showBanner(e.text, e.links, e.autoOpened);
-      break;
-    case "prompt":
-      handlePrompt(e.id, e.prompt);
-      break;
-    case "connected":
-      conn.connected = true;
-      hideBanner();
-      setStatus("online", conn.title, "Connected");
-      fit.fit();
-      if (conn.id !== null) api.resize(conn.id, term.cols, term.rows);
-      term.focus();
-      break;
-    case "closed": {
-      const wasClosed = conn.closed;
-      conn.closed = true;
-      closePrompts();
-      hideBanner();
-      if (e.error) {
-        term.writeln(`\r\n${ansi.err(e.error)}`);
-        setStatus("error", conn.title, "Connection closed with an error");
-      } else if (!wasClosed) {
-        term.writeln(`\r\n${ansi.dim("Connection closed.")}`);
-        setStatus("idle", conn.title, "Disconnected");
-      }
-      break;
-    }
-  }
-}
-
-// ---------------------------------------------------------------- banners (Tailscale)
-
-function showBanner(text: string, links: BannerLink[], autoOpened: string | null) {
-  // Keep the banner in the scrollback too, so the link is never lost.
-  for (const line of text.replace(/\r?\n$/, "").split(/\r?\n/)) term.writeln(ansi.warn(line));
-
-  $("banner-text").textContent = text.trim();
-  const box = $("banner-links");
-  box.replaceChildren();
-  let tailscale = false;
-  for (const link of links) {
-    const row = el("div", { class: "banner-link" });
-    row.append(el("code", { text: link.url }));
-    if (link.tailscale) {
-      tailscale = true;
-      const label = autoOpened === link.url ? "Open again" : "Open in browser";
-      const btn = el("button", { class: "btn primary", type: "button", text: label });
-      btn.addEventListener("click", () => openLink(link.url));
-      row.append(btn);
-    } else {
-      const btn = el("button", { class: "btn", type: "button", text: "Open link…" });
-      btn.addEventListener("click", async () => {
-        const ok = await confirm("Open this link?", `The server sent a link to a site outside Tailscale:\n\n${link.url}\n\nOnly open it if you trust this server.`, "Open");
-        if (ok) openLink(link.url);
-      });
-      row.append(btn);
-    }
-    box.append(row);
-  }
-  if (autoOpened) box.append(el("p", { class: "hint", text: "Opened the sign-in page in your browser." }));
-  $("banner-wait").hidden = !tailscale;
-  $("banner").hidden = false;
-  if (tailscale && conn) setStatus("busy", conn.title, "Waiting for Tailscale approval");
-}
-
-function hideBanner() {
-  $("banner").hidden = true;
-}
-
-function openLink(url: string) {
-  api.openLink(url).catch((e) => term.writeln(ansi.err(String(e))));
-}
-
-// ---------------------------------------------------------------- prompts
-
-function closePrompts() {
-  for (const close of [...openPrompts]) close();
-  openPrompts.clear();
-}
-
-async function handlePrompt(id: number, prompt: Prompt) {
-  const cancel: PromptAnswer = { accept: false, values: [], save: false };
-  let modal: { result: Promise<PromptAnswer>; close: () => void };
-
-  switch (prompt.kind) {
-    case "hostKey": {
-      const where = prompt.port === 22 ? prompt.host : `${prompt.host}:${prompt.port}`;
-      modal = showModal<PromptAnswer>({
-        title: "Trust this server?",
-        body: [
-          el("p", { text: `This is your first connection to ${where}. Check that the fingerprint below matches the server's before you trust it.` }),
-          el("div", { class: "fingerprint" }, el("span", { text: prompt.algorithm }), el("code", { text: prompt.fingerprint })),
-          el("p", { class: "hint", text: "On the server, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" }),
-        ],
-        buttons: [
-          { label: "Cancel", value: () => cancel },
-          { label: "Trust and connect", value: () => ({ accept: true, values: [], save: false }), primary: true },
-        ],
-        onDismiss: () => cancel,
-      });
-      break;
-    }
-    case "password":
-    case "passphrase": {
-      const input = el("input", { type: "password", autocomplete: "off" });
-      const [saveRow, save] = checkbox("Save in system keychain");
-      const isPw = prompt.kind === "password";
-      const label = isPw ? `Password for ${prompt.user}@${prompt.host}` : `Passphrase for ${prompt.keyPath}`;
-      modal = showModal<PromptAnswer>({
-        title: isPw ? "Password" : "Key passphrase",
-        body: [
-          prompt.retry ? el("p", { class: "modal-error", text: isPw ? "That password didn't work. Try again." : "Wrong passphrase. Try again." }) : el("span"),
-          field(label, input),
-          prompt.canSave ? saveRow : el("span"),
-        ],
-        buttons: [
-          { label: "Cancel", value: () => cancel },
-          { label: "Log in", value: () => ({ accept: true, values: [input.value], save: save.checked }), primary: true },
-        ],
-        onDismiss: () => cancel,
-      });
-      break;
-    }
-    case "keyboardInteractive": {
-      const inputs = prompt.fields.map((f) => el("input", { type: f.echo ? "text" : "password", autocomplete: "off" }));
-      const [saveRow, save] = checkbox("Save in system keychain");
-      modal = showModal<PromptAnswer>({
-        title: prompt.name || "Server login",
-        body: [
-          prompt.instructions ? el("p", { text: prompt.instructions }) : el("span"),
-          ...prompt.fields.map((f, i) => field(f.label.trim() || "Response", inputs[i])),
-          prompt.canSave ? saveRow : el("span"),
-        ],
-        buttons: [
-          { label: "Cancel", value: () => cancel },
-          { label: "Continue", value: () => ({ accept: true, values: inputs.map((i) => i.value), save: save.checked }), primary: true },
-        ],
-        onDismiss: () => cancel,
-      });
-      break;
-    }
-  }
-
-  openPrompts.add(modal.close);
-  const answer = await modal.result;
-  openPrompts.delete(modal.close);
-  await api.answerPrompt(id, answer);
 }
 
 // ---------------------------------------------------------------- saved sessions
@@ -318,7 +362,7 @@ async function refreshSessions() {
     sessions = await api.listSessions();
   } catch (e) {
     sessions = [];
-    term.writeln(ansi.err(`Couldn't load saved sessions: ${e}`));
+    activePane().term.writeln(ansi.err(`Couldn't load saved sessions: ${e}`));
   }
   renderSessions();
 }
@@ -413,7 +457,7 @@ function sessionRow(s: SavedSession): HTMLElement {
 }
 
 function connectSaved(s: SavedSession) {
-  connectTo(
+  openSession(
     {
       sessionId: s.id,
       host: s.host,
@@ -422,6 +466,8 @@ function connectSaved(s: SavedSession) {
       auth: s.auth,
       keyPath: s.keyPath,
       autoOpenTailscale: s.autoOpenTailscale,
+      log: s.autoLog,
+      label: s.name,
     },
     s.name,
   );
@@ -439,6 +485,7 @@ async function editSession(existing?: Partial<SavedSession>) {
     auth: existing?.auth ?? "password",
     keyPath: existing?.keyPath ?? null,
     autoOpenTailscale: existing?.autoOpenTailscale ?? false,
+    autoLog: existing?.autoLog ?? false,
   };
 
   const name = el("input", { value: s.name, placeholder: "Kali lab", spellcheck: "false" });
@@ -461,6 +508,8 @@ async function editSession(existing?: Partial<SavedSession>) {
   auth.addEventListener("change", syncKey);
   syncKey();
   const [autoRow, autoOpen] = checkbox("Open Tailscale sign-in links automatically", s.autoOpenTailscale);
+  const [logRow, autoLog] = checkbox("Log this session to a file automatically", s.autoLog);
+  const logHint = el("small", { class: "hint", text: "Logs hold everything the server prints, which can include secrets. Change the folder in Settings." });
 
   let forget: HTMLElement = el("span");
   if (!isNew) {
@@ -483,6 +532,7 @@ async function editSession(existing?: Partial<SavedSession>) {
     auth: auth.value as SavedSession["auth"],
     keyPath: auth.value === "key" ? keyPath.value.trim() || null : null,
     autoOpenTailscale: autoOpen.checked,
+    autoLog: autoLog.checked,
   });
 
   const choice = await showModal<"cancel" | "save" | "connect">({
@@ -494,6 +544,8 @@ async function editSession(existing?: Partial<SavedSession>) {
       el("div", { class: "grid" }, field("Username", user), field("Login with", auth)),
       keyField,
       autoRow,
+      logRow,
+      logHint,
       forget,
     ],
     buttons: [
@@ -548,9 +600,10 @@ $("quick-connect").addEventListener("submit", (e) => {
     editSession({ host: parsed.host, port: parsed.port, name: parsed.host });
     return;
   }
-  connectTo(
-    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false },
-    `${parsed.user}@${parsed.host}`,
+  const title = `${parsed.user}@${parsed.host}`;
+  openSession(
+    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title },
+    title,
   );
 });
 $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).classList.remove("invalid"));
@@ -559,80 +612,24 @@ $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).clas
 
 $("search").addEventListener("input", renderSessions);
 $("new-session").addEventListener("click", () => editSession());
-$("disconnect").addEventListener("click", disconnect);
-$("reconnect").addEventListener("click", () => {
-  if (conn?.closed) connectTo(conn.request, conn.title);
-});
-$("banner-cancel").addEventListener("click", disconnect);
+$("settings").addEventListener("click", openSettings);
+$("new-tab").addEventListener("click", () => newTab());
+$("disconnect").addEventListener("click", () => activePane().conn.disconnect());
+$("reconnect").addEventListener("click", () => activePane().conn.retry());
+$("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
+$("split-right").addEventListener("click", () => splitPane("row"));
+$("split-down").addEventListener("click", () => splitPane("column"));
 
-term.onData((data) => {
-  if (conn?.connected && !conn.closed && conn.id !== null) api.sendInput(conn.id, data);
-});
-term.onResize(({ cols, rows }) => {
-  if (conn?.connected && !conn.closed && conn.id !== null) api.resize(conn.id, cols, rows);
-});
-
-function setFontSize(size: number) {
-  const clamped = Math.max(9, Math.min(32, size));
-  term.options.fontSize = clamped;
-  savePref("fontSize", String(clamped));
-  fit.fit();
-}
-
-async function paste() {
-  try {
-    const text = await readText();
-    if (text) term.paste(text);
-  } catch {
-    // Clipboard empty or not text.
-  }
-}
-
-term.attachCustomKeyEventHandler((e) => {
-  if (e.type !== "keydown") return true;
-  const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.shiftKey && e.code === "KeyC") {
-    if (term.hasSelection()) writeText(term.getSelection());
-    return false;
-  }
-  if (mod && e.shiftKey && e.code === "KeyV") {
-    paste();
-    return false;
-  }
-  if (mod && !e.shiftKey && (e.key === "=" || e.key === "+")) {
-    setFontSize((term.options.fontSize ?? DEFAULT_FONT_SIZE) + 1);
-    return false;
-  }
-  if (mod && !e.shiftKey && e.key === "-") {
-    setFontSize((term.options.fontSize ?? DEFAULT_FONT_SIZE) - 1);
-    return false;
-  }
-  if (mod && !e.shiftKey && e.key === "0") {
-    setFontSize(DEFAULT_FONT_SIZE);
-    return false;
-  }
-  return true;
-});
-
-// Right-click copies the selection, or pastes when nothing is selected.
-$("terminal").addEventListener("contextmenu", (e) => {
-  e.preventDefault();
-  if (term.hasSelection()) {
-    writeText(term.getSelection());
-    term.clearSelection();
-  } else {
-    paste();
-  }
+// App shortcuts also work when focus is outside the terminal, e.g. in the sidebar.
+document.addEventListener("keydown", (e) => {
+  if ((e.target as HTMLElement | null)?.closest?.(".xterm, .backdrop")) return;
+  if (shortcut(e)) e.preventDefault();
 });
 
 async function start() {
   // Load both weights first so bold prompts render in real bold from the start.
   await Promise.allSettled([document.fonts.load('14px "Fira Code"'), document.fonts.load('bold 14px "Fira Code"')]);
-  term.open($("terminal"));
-  fit.fit();
-  new ResizeObserver(() => fit.fit()).observe($("terminal"));
-  welcome();
-  setStatus("idle", "Not connected");
+  newTab();
   await refreshSessions();
 }
 
