@@ -1,5 +1,7 @@
 // What sending a snippet does. Kept free of DOM code so it can be tested.
 
+import { needsPastePreview } from "./paste";
+
 export interface Snippet {
   id: string;
   name: string;
@@ -21,9 +23,15 @@ export function lineCount(s: Snippet): number {
   return payload(s).text.split("\n").length;
 }
 
-/** Running a command, or pasting several lines, is shown first and confirmed. */
+/** Running a command is shown first and confirmed, and so is anything the paste
+ * review would stop: several lines or control characters. */
 export function needsPreview(s: Snippet): boolean {
-  return s.run || lineCount(s) > 1;
+  return s.run || needsPastePreview(payload(s).text);
+}
+
+/** Anything a plain paste would also review is risky, so Enter cancels instead of sending. */
+export function risky(s: Snippet): boolean {
+  return needsPastePreview(payload(s).text);
 }
 
 /** Snippets by group, ungrouped first, in the order given. */

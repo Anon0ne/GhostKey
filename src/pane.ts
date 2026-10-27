@@ -1,13 +1,15 @@
 // A terminal pane: its own xterm, Tailscale banner, login prompts, and Connection.
 
 import { Terminal } from "@xterm/xterm";
+import { SearchAddon } from "@xterm/addon-search";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import { api, type BannerLink, type Prompt, type PromptAnswer } from "./api";
-import { ansi, Connection } from "./connection";
+import { ansi, Connection, type BaseRequest } from "./connection";
 import { checkbox, confirm, el, field, showModal } from "./modal";
+import { needsPastePreview, pasteLineCount, pastePreview } from "./paste";
 import { FONT_FAMILY, kaliDark } from "./theme";
 
 export interface PaneHost {
@@ -30,6 +32,11 @@ export class Pane {
   readonly term: Terminal;
   readonly conn: Connection;
   private fitAddon = new FitAddon();
+  private searchAddon = new SearchAddon();
+  private searchBar: HTMLElement;
+  private searchInput: HTMLInputElement;
+  private searchStatus: HTMLElement;
+  private pastePending = false;
   private termEl: HTMLElement;
   private banner: HTMLElement;
   private bannerText: HTMLElement;
@@ -52,8 +59,29 @@ export class Pane {
       cancel,
     );
     this.banner = el("section", { class: "banner", hidden: true }, this.bannerText, this.bannerLinks, this.bannerWait);
+    this.searchInput = el("input", { placeholder: "Find in this terminal", "aria-label": "Find in this terminal", spellcheck: "false" });
+    this.searchStatus = el("span", { role: "status", "aria-live": "polite" });
+    const previous = el("button", { class: "btn", type: "button", text: "Previous", title: "Previous match (Shift+Enter)" });
+    const next = el("button", { class: "btn", type: "button", text: "Next", title: "Next match (Enter)" });
+    const closeSearch = el("button", { class: "btn", type: "button", text: "Close", "aria-label": "Close terminal search" });
+    this.searchBar = el("div", { class: "terminal-search", hidden: true, role: "search" }, this.searchInput, this.searchStatus, previous, next, closeSearch);
+    this.searchInput.addEventListener("input", () => this.find(false, true));
+    this.searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.find(e.shiftKey);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.closeSearch();
+      }
+    });
+    previous.addEventListener("click", () => this.find(true));
+    next.addEventListener("click", () => this.find(false));
+    closeSearch.addEventListener("click", () => this.closeSearch());
     this.termEl = el("div", { class: "terminal" });
-    this.el = el("div", { class: "pane" }, this.banner, this.termEl);
+    this.el = el("div", { class: "pane" }, this.searchBar, this.banner, this.termEl);
 
     this.term = new Terminal({
       theme: kaliDark,
@@ -66,6 +94,7 @@ export class Pane {
       allowProposedApi: false,
     });
     this.term.loadAddon(this.fitAddon);
+    this.term.loadAddon(this.searchAddon);
     this.term.loadAddon(
       new WebLinksAddon((event, uri) => {
         // Ctrl/Cmd+click opens links, as in most terminals.
@@ -76,7 +105,11 @@ export class Pane {
     this.conn = new Connection(api, {
       write: (data) => this.term.write(data),
       writeln: (text) => this.term.writeln(text),
-      reset: () => this.term.reset(),
+      reset: () => {
+        this.searchAddon.clearDecorations();
+        this.searchStatus.textContent = "";
+        this.term.reset();
+      },
       size: () => ({ cols: this.term.cols, rows: this.term.rows }),
       fit: () => this.fit(),
       focus: () => this.focus(),
@@ -102,6 +135,12 @@ export class Pane {
       }
     });
 
+    // Capture before xterm's own paste listener, including Ctrl+V and Shift+Insert.
+    this.termEl.addEventListener("paste", (e) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      void this.pasteText(e.clipboardData?.getData("text/plain") ?? "");
+    }, true);
     this.term.open(this.termEl);
     this.term.textarea?.addEventListener("focus", () => host.activate(this));
     this.observer = new ResizeObserver(() => this.fit());
@@ -142,22 +181,92 @@ export class Pane {
   }
 
   async paste() {
+    // Capture the destination before waiting for the OS clipboard.
+    const request = this.conn.request;
+    const id = this.conn.id;
     try {
       const text = await readText();
-      if (text) this.term.paste(text);
+      if (this.conn.request === request && this.conn.id === id) await this.pasteText(text ?? "");
     } catch {
-      // Clipboard empty or not text.
+      // Clipboard unavailable; no terminal input was sent.
     }
   }
 
-  /** Types text into the shell, then presses Enter if asked. Returns false when not connected. */
-  sendText(text: string, enter: boolean): boolean {
-    if (!this.conn.online) return false;
+  /** Types an already approved snippet into the shell, then presses Enter if asked.
+   * Returns false when the pane disconnected or reconnected since `bound` was taken,
+   * so an approval never carries over to another connection. */
+  sendText(text: string, enter: boolean, bound: { id: number | null; request: BaseRequest | null }): boolean {
+    if (this.disposed || !this.conn.online || this.conn.id !== bound.id || this.conn.request !== bound.request) return false;
     // paste() turns newlines into Enter and uses bracketed paste when the shell asks for it.
     this.term.paste(text);
     if (enter) this.conn.input("\r");
     this.focus();
     return true;
+  }
+
+  /** All programmatic pastes (including future snippets) must use this entry point. */
+  async pasteText(text: string) {
+    if (!text || this.disposed || !this.conn.online || this.pastePending) return;
+    const request = this.conn.request!;
+    const id = this.conn.id;
+    this.pastePending = true;
+    try {
+      if (needsPastePreview(text)) {
+        const modal = showModal<boolean>({
+          title: "Review terminal paste",
+          wide: true,
+          body: [
+            el("p", { text: `Destination: ${request.username}@${request.host}:${request.port} (${this.title})` }),
+            el("p", { text: `${pasteLineCount(text)} lines. Newlines or control characters may execute commands immediately. Control characters other than line feed are shown as Unicode escapes.` }),
+            el("pre", { class: "paste-preview", text: pastePreview(text) }),
+          ],
+          // Enter dismisses safely instead of approving a dangerous paste by accident.
+          buttons: [
+            { label: "Cancel", value: () => false, primary: true },
+            { label: "Paste to this terminal", value: () => true },
+          ],
+          onDismiss: () => false,
+        });
+        this.openPrompts.add(modal.close);
+        const approved = await modal.result;
+        this.openPrompts.delete(modal.close);
+        if (!approved) return;
+      }
+      // Focus changes cannot redirect this paste; reconnects invalidate approval.
+      if (!this.disposed && this.conn.online && this.conn.id === id && this.conn.request === request) {
+        this.term.paste(text);
+      }
+    } finally {
+      this.pastePending = false;
+    }
+  }
+
+  openSearch() {
+    this.searchBar.hidden = false;
+    this.searchInput.focus();
+    this.searchInput.select();
+    this.fit();
+  }
+
+  private closeSearch() {
+    this.searchBar.hidden = true;
+    this.searchAddon.clearDecorations();
+    this.searchStatus.textContent = "";
+    this.fit();
+    this.focus();
+  }
+
+  private find(previous: boolean, incremental = false) {
+    const text = this.searchInput.value;
+    if (!text) {
+      this.searchAddon.clearDecorations();
+      this.searchStatus.textContent = "";
+      return;
+    }
+    const found = previous
+      ? this.searchAddon.findPrevious(text, { regex: false })
+      : this.searchAddon.findNext(text, { regex: false, incremental });
+    this.searchStatus.textContent = found ? "Match selected" : "No matches";
   }
 
   dispose() {
@@ -172,11 +281,17 @@ export class Pane {
   private onKey(e: KeyboardEvent): boolean {
     if (e.type !== "keydown") return true;
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.shiftKey && e.code === "KeyF") {
+      e.preventDefault();
+      this.openSearch();
+      return false;
+    }
     if (mod && e.shiftKey && e.code === "KeyC") {
       this.copy();
       return false;
     }
     if (mod && e.shiftKey && e.code === "KeyV") {
+      e.preventDefault();
       this.paste();
       return false;
     }

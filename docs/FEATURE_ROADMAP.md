@@ -44,8 +44,8 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
 | F12 | Workspace layouts | Planned | — | — | Coordinate with F01's pane/session model |
 | F13 | Host identity guardrails | Planned | — | — | Define host labels and production designation |
-| F14 | Searchable terminal history | Planned | — | — | Define scrollback search and retention choices |
-| F15 | Safe paste preview | Planned | — | — | Cover every paste entry point |
+| F14 | Searchable terminal history | In progress | Codex | `feature/paste-and-history` | Per-pane in-memory search implemented; review pending; persistent/all-pane history deferred |
+| F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
 | F16 | Evidence bookmarks | Planned | — | — | Define selection metadata and export format |
 | F17 | Portable session profiles | Planned | — | — | Define versioned export/import format |
 | F18 | Local terminal tabs | Planned | — | — | Define local PTY lifecycle on both platforms |
@@ -289,6 +289,21 @@ Copy this block into a dated entry below when starting or stopping work:
     listed a telnet session as skipped. The Windows registry reader was compiled for
     `x86_64-pc-windows-gnu` in isolation but not run on Windows.
   - Next: Claude plans F08 (snippets) after this merges.
+- 2026-10-27 — Anon0ne, search/paste session: F14/F15 on
+  `feature/paste-and-history`, based on `f5a8ed8`. Changes center on src/pane.ts,
+  a shared src/paste.ts policy, and small toolbar/style additions. F07/import
+  implementation is untouched. Per-pane literal scrollback search supports
+  Ctrl+Shift+F, next/previous, and Escape. No persistent history or timestamps.
+  Multiline/control-character pastes require explicit review; Enter cancels.
+  Keyboard clipboard, context menu, and captured native paste use the same gate.
+  Approval is bound to a pane and connection; reconnect/dispose invalidates it.
+  Future snippets should call Pane.pasteText; future broadcast needs an explicit
+  multi-destination approval flow and must not bypass the gate.
+  Checks: 8 new pane/paste tests, 14 connection tests, 8 import tests pass;
+  npm run build and git diff --check pass. Native Windows/Linux interaction
+  and packaged-installer smoke tests remain pending. Next: review PR and
+  reconcile with concurrent pane/snippet edits before merging. F14/F15 are
+  deliberately not marked Done until merged and remaining scope is reconciled.
 - 2026-10-27 — Claude: #7 merged (F07 Done). Started F08 on `snippets` from f5a8ed8.
   Owns `src-tauri/src/snippets.rs` (new), `src/snippets.ts` (new) and the snippet UI.
   F15 (safe paste preview) is not built; F08 will include a small preview for multiline
@@ -307,3 +322,12 @@ Copy this block into a dated entry below when starting or stopping work:
     snippet, sent both from the bar to a live session, and the run preview showed the
     destination and both lines.
   - Not done: placeholders; per-snippet target selection (F06 broadcast).
+- 2026-10-27 — Claude: #8 merged; merged main into `snippets` and joined F08 to F15.
+  - Snippets follow the paste policy instead of showing a second review:
+    `needsPreview` is true for run mode or whenever `needsPastePreview` is, the preview
+    shows `pastePreview` escapes and the destination, and Cancel is the Enter default
+    when the text has newlines or control characters.
+  - The pane and its connection (id and request) are captured before the preview;
+    `Pane.sendText(text, enter, bound)` drops the send if they changed, the same rule
+    as `Pane.pasteText`. Snippets don't call `pasteText` because that would review twice.
+  - F06 broadcast must still add its own multi-destination approval.

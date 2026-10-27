@@ -9,7 +9,8 @@ import { api, type SavedSession } from "./api";
 import { ansi, type BaseRequest } from "./connection";
 import { clampRatio, leaf, nearest, panes, remove, split, type Dir, type Direction, type LayoutNode } from "./layout";
 import { planRows, problem, toSessions, type Row, type Scan } from "./importPlan";
-import { grouped, lineCount, needsPreview, payload, type Snippet } from "./snippets";
+import { grouped, lineCount, needsPreview, payload, risky, type Snippet } from "./snippets";
+import { pastePreview } from "./paste";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { DEFAULT_FONT_SIZE } from "./theme";
@@ -277,6 +278,9 @@ function shortcut(e: KeyboardEvent): boolean {
   }
   if (mod && e.shiftKey && !e.altKey) {
     switch (e.code) {
+      case "KeyF":
+        activePane().openSearch();
+        return true;
       case "KeyT":
         newTab();
         return true;
@@ -470,35 +474,41 @@ function destination(pane: Pane): string {
   return `${pane.conn.title} (${r.username}@${r.host}${r.port === 22 ? "" : `:${r.port}`})`;
 }
 
-/** Sends a snippet to the focused pane. Running it, or pasting several lines,
- * is previewed first; the pane is chosen before the preview, so changing
- * focus meanwhile can't redirect it. */
+/** Sends a snippet to the focused pane. Running it, or anything a paste would
+ * review (several lines, control characters), is previewed first. The pane and
+ * its connection are fixed before the preview, so changing focus or reconnecting
+ * meanwhile can't redirect it. This preview replaces the paste review, so only
+ * one is shown. */
 async function sendSnippet(s: Snippet) {
   const pane = activePane();
   if (!pane.conn.online) {
     await confirm("Not connected", "Connect this pane to a server before sending a snippet.", "OK");
     return;
   }
+  const bound = { id: pane.conn.id, request: pane.conn.request };
   const { text, enter } = payload(s);
   if (needsPreview(s)) {
     const lines = lineCount(s);
+    const careful = risky(s);
     const ok = await showModal<boolean>({
       title: enter ? `Run "${s.name}"?` : `Type in "${s.name}"?`,
       body: [
         el("div", { class: "fingerprint" }, el("span", { text: "Destination" }), el("code", { text: destination(pane) })),
-        el("pre", { class: "snippet-preview", text }),
+        el("pre", { class: "snippet-preview", text: pastePreview(text) }),
         el("p", {
           class: "hint",
           text: [
             `${lines} ${lines === 1 ? "line" : "lines"}.`,
             enter ? "Enter is pressed after the text." : "Nothing runs until you press Enter.",
             lines > 1 ? "If the server's shell doesn't support bracketed paste, each line may run as it arrives." : "",
+            careful ? "Control characters other than line feed are shown as Unicode escapes." : "",
           ].join(" "),
         }),
       ],
+      // Like the paste review, Enter cancels when the text could run more than one command.
       buttons: [
-        { label: "Cancel", value: () => false },
-        { label: enter ? "Run" : "Type in", value: () => true, primary: true },
+        { label: "Cancel", value: () => false, primary: careful },
+        { label: enter ? "Run" : "Type in", value: () => true, primary: !careful },
       ],
       onDismiss: () => false,
     }).result;
@@ -507,8 +517,8 @@ async function sendSnippet(s: Snippet) {
       return;
     }
   }
-  if (!pane.sendText(text, enter)) {
-    await confirm("Not sent", `${pane.conn.title} disconnected before the snippet was sent.`, "OK");
+  if (!pane.sendText(text, enter, bound)) {
+    await confirm("Not sent", `${pane.conn.title} disconnected or reconnected before the snippet was sent.`, "OK");
   }
 }
 
@@ -929,6 +939,7 @@ $("new-tab").addEventListener("click", () => newTab());
 $("disconnect").addEventListener("click", () => activePane().conn.disconnect());
 $("reconnect").addEventListener("click", () => activePane().conn.retry());
 $("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
+$("terminal-find").addEventListener("click", () => activePane().openSearch());
 $("split-right").addEventListener("click", () => splitPane("row"));
 $("split-down").addEventListener("click", () => splitPane("column"));
 
