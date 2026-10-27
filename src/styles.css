@@ -559,6 +559,130 @@ input.invalid {
   gap: 10px;
 }
 
+/* ------------------------------------------------------------ snippets */
+
+#snippet-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-deep);
+  min-height: 34px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#snippet-favorites {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bar-btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 10px;
+  font: 12px var(--ui);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+}
+
+.bar-btn:hover:not([disabled]) {
+  background: var(--panel-hover);
+}
+
+.bar-btn.run {
+  border-color: rgba(254, 164, 76, 0.55);
+}
+
+.bar-btn[disabled] {
+  color: var(--muted);
+  cursor: default;
+}
+
+.snippet-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.snippet-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 6px;
+}
+
+.snippet-row:hover {
+  background: var(--panel);
+}
+
+.snippet-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.snippet-command {
+  font: 11.5px var(--mono);
+  color: var(--green);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.snippet-mode {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 7px;
+}
+
+.snippet-mode.run {
+  color: var(--yellow);
+  border-color: rgba(254, 164, 76, 0.55);
+}
+
+.snippet-input,
+.snippet-preview {
+  font: 12.5px/1.5 var(--mono);
+}
+
+textarea.snippet-input {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  resize: vertical;
+  outline: none;
+}
+
+textarea.snippet-input:focus {
+  border-color: var(--accent);
+}
+
+.snippet-preview {
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--text);
+  white-space: pre;
+}
+
 .modal.wide {
   width: min(760px, calc(100vw - 32px));
 }

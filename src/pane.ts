@@ -150,6 +150,16 @@ export class Pane {
     }
   }
 
+  /** Types text into the shell, then presses Enter if asked. Returns false when not connected. */
+  sendText(text: string, enter: boolean): boolean {
+    if (!this.conn.online) return false;
+    // paste() turns newlines into Enter and uses bracketed paste when the shell asks for it.
+    this.term.paste(text);
+    if (enter) this.conn.input("\r");
+    this.focus();
+    return true;
+  }
+
   dispose() {
     this.disposed = true;
     this.conn.disconnect();

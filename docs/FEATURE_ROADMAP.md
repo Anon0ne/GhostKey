@@ -38,7 +38,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
-| F08 | Command snippets and button bar | In progress | Claude | `snippets` | Snippet store, editor, button bar; preview before multiline or run |
+| F08 | Command snippets and button bar | In progress | Claude | `snippets` | Implemented; awaiting review and merge. Placeholders not done |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
 | F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
@@ -293,3 +293,17 @@ Copy this block into a dated entry below when starting or stopping work:
   Owns `src-tauri/src/snippets.rs` (new), `src/snippets.ts` (new) and the snippet UI.
   F15 (safe paste preview) is not built; F08 will include a small preview for multiline
   and run-mode snippets that names the destination, which F15 can later replace.
+- 2026-10-27 — Claude: F08 implemented on `snippets` (replaces the abandoned
+  `f08-snippets` branch, which can be deleted). Commits on this repo are now authored as
+  0nezer0 without AI attribution, at Justin's request.
+  - `src-tauri/src/snippets.rs` stores snippets in `snippets.json` (same atomic write and
+    schema version as sessions). `src/snippets.ts` holds the send rules: type-in by
+    default, run is opt-in, trailing newlines dropped, preview for run or multiline.
+    UI in `main.ts` (bar, list, editor, preview); `Pane.sendText` pastes through xterm so
+    bracketed paste applies.
+  - F15 overlap: the snippet preview names the destination and fixes the target pane
+    before confirmation. F15 should reuse or replace it when it covers every paste.
+  - Checks (Linux): 38 Rust tests, 26 frontend tests; real app created a type-in and a run
+    snippet, sent both from the bar to a live session, and the run preview showed the
+    destination and both lines.
+  - Not done: placeholders; per-snippet target selection (F06 broadcast).

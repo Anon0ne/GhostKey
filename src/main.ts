@@ -9,6 +9,7 @@ import { api, type SavedSession } from "./api";
 import { ansi, type BaseRequest } from "./connection";
 import { clampRatio, leaf, nearest, panes, remove, split, type Dir, type Direction, type LayoutNode } from "./layout";
 import { planRows, problem, toSessions, type Row, type Scan } from "./importPlan";
+import { grouped, lineCount, needsPreview, payload, type Snippet } from "./snippets";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { DEFAULT_FONT_SIZE } from "./theme";
@@ -32,6 +33,7 @@ function savePref(key: string, value: string) {
 }
 
 let sessions: SavedSession[] = [];
+let snippets: Snippet[] = [];
 let fontSize = Number(loadPref("fontSize", String(DEFAULT_FONT_SIZE))) || DEFAULT_FONT_SIZE;
 
 // ---------------------------------------------------------------- tabs and panes
@@ -257,6 +259,7 @@ function renderToolbar() {
   const rec = $("log-indicator");
   rec.hidden = !conn.logPath;
   rec.title = conn.logPath ? `Logging to ${conn.logPath}` : "";
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#snippet-favorites button")) b.disabled = !conn.online;
 }
 
 function shortcut(e: KeyboardEvent): boolean {
@@ -288,6 +291,9 @@ function shortcut(e: KeyboardEvent): boolean {
         return true;
       case "KeyL":
         activePane().conn.toggleLog();
+        return true;
+      case "KeyS":
+        openSnippets();
         return true;
     }
   }
@@ -424,6 +430,196 @@ async function importSessions() {
   }
   await refreshSessions();
   if (failed.length) await confirm("Some sessions weren't imported", failed.join("\n"), "OK");
+}
+
+// ---------------------------------------------------------------- snippets
+
+async function refreshSnippets() {
+  try {
+    snippets = await api.listSnippets();
+  } catch (e) {
+    snippets = [];
+    activePane().term.writeln(ansi.err(`Couldn't load snippets: ${e}`));
+  }
+  renderSnippetBar();
+}
+
+function renderSnippetBar() {
+  const bar = $("snippet-favorites");
+  bar.replaceChildren();
+  const favorites = snippets.filter((s) => s.favorite);
+  if (favorites.length === 0) {
+    bar.append(el("span", { class: "hint", text: "Star a snippet to put it here." }));
+  }
+  for (const s of favorites) {
+    const b = el("button", { class: `bar-btn${s.run ? " run" : ""}`, type: "button", title: snippetTitle(s), text: s.run ? `${s.name} ⏎` : s.name });
+    b.addEventListener("click", () => sendSnippet(s));
+    bar.append(b);
+  }
+  renderToolbar();
+}
+
+function snippetTitle(s: Snippet): string {
+  const how = s.run ? "Runs" : "Types in (you press Enter)";
+  return `${how}: ${payload(s).text}`;
+}
+
+function destination(pane: Pane): string {
+  const r = pane.conn.request;
+  if (!r) return pane.title;
+  return `${pane.conn.title} (${r.username}@${r.host}${r.port === 22 ? "" : `:${r.port}`})`;
+}
+
+/** Sends a snippet to the focused pane. Running it, or pasting several lines,
+ * is previewed first; the pane is chosen before the preview, so changing
+ * focus meanwhile can't redirect it. */
+async function sendSnippet(s: Snippet) {
+  const pane = activePane();
+  if (!pane.conn.online) {
+    await confirm("Not connected", "Connect this pane to a server before sending a snippet.", "OK");
+    return;
+  }
+  const { text, enter } = payload(s);
+  if (needsPreview(s)) {
+    const lines = lineCount(s);
+    const ok = await showModal<boolean>({
+      title: enter ? `Run "${s.name}"?` : `Type in "${s.name}"?`,
+      body: [
+        el("div", { class: "fingerprint" }, el("span", { text: "Destination" }), el("code", { text: destination(pane) })),
+        el("pre", { class: "snippet-preview", text }),
+        el("p", {
+          class: "hint",
+          text: [
+            `${lines} ${lines === 1 ? "line" : "lines"}.`,
+            enter ? "Enter is pressed after the text." : "Nothing runs until you press Enter.",
+            lines > 1 ? "If the server's shell doesn't support bracketed paste, each line may run as it arrives." : "",
+          ].join(" "),
+        }),
+      ],
+      buttons: [
+        { label: "Cancel", value: () => false },
+        { label: enter ? "Run" : "Type in", value: () => true, primary: true },
+      ],
+      onDismiss: () => false,
+    }).result;
+    if (!ok) {
+      pane.focus();
+      return;
+    }
+  }
+  if (!pane.sendText(text, enter)) {
+    await confirm("Not sent", `${pane.conn.title} disconnected before the snippet was sent.`, "OK");
+  }
+}
+
+async function openSnippets() {
+  const list = el("div", { class: "snippet-list" });
+  if (snippets.length === 0) list.append(el("p", { class: "empty", text: "No snippets yet. Add one for commands you type often." }));
+  let next: (() => void) | null = null;
+  const modal = showModal<null>({
+    title: "Snippets",
+    wide: true,
+    body: [list],
+    buttons: [
+      { label: "New snippet", value: () => ((next = () => editSnippet()), null) },
+      { label: "Close", value: () => null, primary: true },
+    ],
+    onDismiss: () => null,
+  });
+  const online = activePane().conn.online;
+  for (const [group, items] of grouped(snippets)) {
+    if (group) list.append(el("div", { class: "folder-head", text: group }));
+    for (const s of items) {
+      const send = el("button", { class: "row-btn", type: "button", title: online ? (s.run ? "Run" : "Type in") : "Connect first", text: "▶" });
+      send.disabled = !online;
+      const edit = el("button", { class: "row-btn", type: "button", title: "Edit", text: "✎" });
+      const del = el("button", { class: "row-btn", type: "button", title: "Delete", text: "✕" });
+      send.addEventListener("click", () => {
+        next = () => sendSnippet(s);
+        modal.close();
+      });
+      edit.addEventListener("click", () => {
+        next = () => editSnippet(s);
+        modal.close();
+      });
+      del.addEventListener("click", () => {
+        next = async () => {
+          if (await confirm("Delete snippet?", `Delete "${s.name}"?`, "Delete", true)) {
+            await api.deleteSnippet(s.id);
+            await refreshSnippets();
+          }
+          openSnippets();
+        };
+        modal.close();
+      });
+      list.append(
+        el(
+          "div",
+          { class: "snippet-row" },
+          el(
+            "div",
+            { class: "snippet-text" },
+            el("span", { class: "session-name", text: `${s.favorite ? "★ " : ""}${s.name}` }),
+            el("code", { class: "snippet-command", text: payload(s).text.split("\n").join("  ↵  ") }),
+          ),
+          el("span", { class: `snippet-mode${s.run ? " run" : ""}`, text: s.run ? "Runs" : "Types in" }),
+          send,
+          edit,
+          del,
+        ),
+      );
+    }
+  }
+  await modal.result;
+  (next as (() => void) | null)?.();
+}
+
+async function editSnippet(existing?: Snippet) {
+  const s: Snippet = existing ?? { id: crypto.randomUUID(), name: "", group: "", command: "", run: false, favorite: true };
+  const name = el("input", { value: s.name, placeholder: "List listening ports", spellcheck: "false" });
+  const groups = [...new Set(snippets.map((x) => x.group).filter(Boolean))];
+  const groupList = el("datalist", { id: "snippet-groups" }, ...groups.map((g) => el("option", { value: g })));
+  const group = el("input", { value: s.group, placeholder: "Optional, e.g. Recon", list: "snippet-groups", spellcheck: "false" });
+  const command = el("textarea", { class: "snippet-input", rows: "5", spellcheck: "false", placeholder: "ss -tulpn" });
+  command.value = s.command;
+  const mode = el(
+    "select",
+    {},
+    el("option", { value: "insert", text: "Type it in; I press Enter myself" }),
+    el("option", { value: "run", text: "Type it in and press Enter (asks first)" }),
+  );
+  mode.value = s.run ? "run" : "insert";
+  const [favRow, favorite] = checkbox("Show on the button bar", s.favorite);
+  const read = (): Snippet => ({ ...s, name: name.value.trim(), group: group.value.trim(), command: command.value, run: mode.value === "run", favorite: favorite.checked });
+  const save = await showModal<boolean>({
+    title: existing ? "Edit snippet" : "New snippet",
+    body: [
+      groupList,
+      el("div", { class: "grid" }, field("Name", name), field("Group", group)),
+      field("Command", command, "Several lines are fine; they're shown to you before they're sent."),
+      field("When used", mode),
+      favRow,
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+    validate: () => {
+      const v = read();
+      if (!v.name) return "Give the snippet a name.";
+      if (!v.command.trim()) return "Enter a command.";
+      return null;
+    },
+  }).result;
+  if (!save) return;
+  try {
+    await api.saveSnippet(read());
+  } catch (e) {
+    await confirm("Couldn't save", String(e), "OK");
+    return;
+  }
+  await refreshSnippets();
 }
 
 // ---------------------------------------------------------------- settings
@@ -727,6 +923,7 @@ $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).clas
 $("search").addEventListener("input", renderSessions);
 $("new-session").addEventListener("click", () => editSession());
 $("import-sessions").addEventListener("click", importSessions);
+$("snippets-open").addEventListener("click", () => openSnippets());
 $("settings").addEventListener("click", openSettings);
 $("new-tab").addEventListener("click", () => newTab());
 $("disconnect").addEventListener("click", () => activePane().conn.disconnect());
@@ -745,7 +942,7 @@ async function start() {
   // Load both weights first so bold prompts render in real bold from the start.
   await Promise.allSettled([document.fonts.load('14px "Fira Code"'), document.fonts.load('bold 14px "Fira Code"')]);
   newTab();
-  await refreshSessions();
+  await Promise.all([refreshSessions(), refreshSnippets()]);
 }
 
 start();

@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Scan } from "./importPlan";
+import type { Snippet } from "./snippets";
 
 export type AuthMethod = "password" | "key";
 
@@ -90,6 +91,9 @@ export const api = {
   getLogDir: () => invoke<string>("get_log_dir"),
   setLogDir: (dir: string | null) => invoke<string>("set_log_dir", { dir }),
   openLogDir: () => invoke<void>("open_log_dir"),
+  listSnippets: () => invoke<Snippet[]>("list_snippets"),
+  saveSnippet: (snippet: Snippet) => invoke<void>("save_snippet", { snippet }),
+  deleteSnippet: (id: string) => invoke<void>("delete_snippet", { id }),
   scanImports: () => invoke<Scan>("scan_imports"),
   scanSshConfig: (path: string) => invoke<Scan>("scan_ssh_config", { path }),
 };
