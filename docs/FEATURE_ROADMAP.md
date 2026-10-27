@@ -37,8 +37,8 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
-| F07 | Import PuTTY and SSH config sessions | In progress | Claude | `f07-import` | Implemented; awaiting review and merge. PuTTY registry path checked by compile only |
-| F08 | Command snippets and button bar | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
+| F08 | Command snippets and button bar | In progress | Claude | `f08-snippets` | Snippet store, editor, button bar; preview before multiline or run |
 | F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
 | F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
 | F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
@@ -289,3 +289,7 @@ Copy this block into a dated entry below when starting or stopping work:
     listed a telnet session as skipped. The Windows registry reader was compiled for
     `x86_64-pc-windows-gnu` in isolation but not run on Windows.
   - Next: Claude plans F08 (snippets) after this merges.
+- 2026-10-27 — Claude: #7 merged (F07 Done). Started F08 on `f08-snippets` from f5a8ed8.
+  Owns `src-tauri/src/snippets.rs` (new), `src/snippets.ts` (new) and the snippet UI.
+  F15 (safe paste preview) is not built; F08 will include a small preview for multiline
+  and run-mode snippets that names the destination, which F15 can later replace.
