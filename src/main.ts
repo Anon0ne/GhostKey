@@ -5,7 +5,7 @@ import "./styles.css";
 
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 
-import { api, type SavedSession } from "./api";
+import { api, type ConnectRequest, type SavedSession } from "./api";
 import { ansi, type BaseRequest } from "./connection";
 import { clampRatio, leaf, nearest, panes, remove, split, type Dir, type Direction, type LayoutNode } from "./layout";
 import { planRows, problem, toSessions, type Row, type Scan } from "./importPlan";
@@ -13,6 +13,7 @@ import { grouped, lineCount, needsPreview, payload, risky, type Snippet } from "
 import { pastePreview } from "./paste";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
+import { openTunnels, savedTunnelsEditor, tunnelsChanged } from "./tunnelUi";
 import { DEFAULT_FONT_SIZE } from "./theme";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -152,7 +153,8 @@ function splitPane(dir: Dir) {
   // A split opens another shell on the same server, like QTerminal and SecureCRT.
   if (from.conn.request) {
     const req = from.conn.request;
-    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false }, from.conn.title));
+    // The new shell shares the server but not the tunnels, whose ports are taken.
+    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false, forwards: [] }, from.conn.title));
   } else {
     pane.welcome();
   }
@@ -262,6 +264,15 @@ function renderToolbar() {
   rec.title = conn.logPath ? `Logging to ${conn.logPath}` : "";
   for (const b of document.querySelectorAll<HTMLButtonElement>("#snippet-favorites button")) b.disabled = !conn.online;
   $("files-toggle").setAttribute("aria-pressed", String(activePane().filesOpen));
+  const tunnels = $<HTMLButtonElement>("tunnels");
+  tunnels.hidden = !conn.online;
+  const failed = conn.tunnels.some((t) => t.state === "failed");
+  tunnels.textContent = conn.tunnels.length ? `Tunnels (${conn.tunnels.length})` : "Tunnels";
+  tunnels.classList.toggle("warn", failed);
+  tunnels.title = conn.tunnels.length
+    ? conn.tunnels.map((t) => `${t.state}: ${t.bound ?? ""} ${t.error ?? ""}`.trim()).join("\n")
+    : "Port forwarding for this connection";
+  tunnelsChanged();
 }
 
 function shortcut(e: KeyboardEvent): boolean {
@@ -783,6 +794,15 @@ function sessionRow(s: SavedSession): HTMLElement {
 }
 
 function connectSaved(s: SavedSession) {
+  let jump: ConnectRequest["jump"] = null;
+  if (s.jumpSession) {
+    const j = sessions.find((x) => x.id === s.jumpSession);
+    if (!j) {
+      void confirm("Jump host missing", `"${s.name}" connects through a saved session that no longer exists. Choose another jump host in its settings.`, "OK");
+      return;
+    }
+    jump = { sessionId: j.id, host: j.host, port: j.port, username: j.username, auth: j.auth, keyPath: j.keyPath };
+  }
   openSession(
     {
       sessionId: s.id,
@@ -794,6 +814,8 @@ function connectSaved(s: SavedSession) {
       autoOpenTailscale: s.autoOpenTailscale,
       log: s.autoLog,
       label: s.name,
+      forwards: s.forwards ?? [],
+      jump,
     },
     s.name,
   );
@@ -812,6 +834,8 @@ async function editSession(existing?: Partial<SavedSession>) {
     keyPath: existing?.keyPath ?? null,
     autoOpenTailscale: existing?.autoOpenTailscale ?? false,
     autoLog: existing?.autoLog ?? false,
+    forwards: existing?.forwards ?? [],
+    jumpSession: existing?.jumpSession ?? null,
   };
 
   const name = el("input", { value: s.name, placeholder: "Kali lab", spellcheck: "false" });
@@ -836,6 +860,17 @@ async function editSession(existing?: Partial<SavedSession>) {
   const [autoRow, autoOpen] = checkbox("Open Tailscale sign-in links automatically", s.autoOpenTailscale);
   const [logRow, autoLog] = checkbox("Log this session to a file automatically", s.autoLog);
   const logHint = el("small", { class: "hint", text: "Logs hold everything the server prints, which can include secrets. Change the folder in Settings." });
+  // One hop: a session that itself uses a jump host can't be one.
+  const jumpChoices = sessions.filter((x) => x.id !== s.id && !x.jumpSession);
+  const jump = el(
+    "select",
+    {},
+    el("option", { value: "", text: "None, connect directly" }),
+    ...jumpChoices.map((x) => el("option", { value: x.id, text: `${x.name} (${x.username}@${x.host})` })),
+  );
+  jump.value = jumpChoices.some((x) => x.id === s.jumpSession) ? s.jumpSession! : "";
+  const jumpField = field("Jump host", jump, "Connect through another saved session first, like ssh -J. Each server's host key is checked.");
+  const tunnels = savedTunnelsEditor(s.forwards);
 
   let forget: HTMLElement = el("span");
   if (!isNew) {
@@ -859,6 +894,8 @@ async function editSession(existing?: Partial<SavedSession>) {
     keyPath: auth.value === "key" ? keyPath.value.trim() || null : null,
     autoOpenTailscale: autoOpen.checked,
     autoLog: autoLog.checked,
+    forwards: tunnels.read(),
+    jumpSession: jump.value || null,
   });
 
   const choice = await showModal<"cancel" | "save" | "connect">({
@@ -869,9 +906,11 @@ async function editSession(existing?: Partial<SavedSession>) {
       el("div", { class: "grid host-row" }, field("Host", host), field("Port", port)),
       el("div", { class: "grid" }, field("Username", user), field("Login with", auth)),
       keyField,
+      jumpField,
       autoRow,
       logRow,
       logHint,
+      tunnels.el,
       forget,
     ],
     buttons: [
@@ -928,7 +967,7 @@ $("quick-connect").addEventListener("submit", (e) => {
   }
   const title = `${parsed.user}@${parsed.host}`;
   openSession(
-    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title },
+    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jump: null },
     title,
   );
 });
@@ -947,6 +986,7 @@ $("reconnect").addEventListener("click", () => activePane().conn.retry());
 $("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
 $("terminal-find").addEventListener("click", () => activePane().openSearch());
 $("files-toggle").addEventListener("click", () => activePane().toggleFiles());
+$("tunnels").addEventListener("click", () => void openTunnels(activePane().conn));
 $("split-right").addEventListener("click", () => splitPane("row"));
 $("split-down").addEventListener("click", () => splitPane("column"));
 

@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Scan } from "./importPlan";
 import type { Snippet } from "./snippets";
 import type { Listing, TransferEvent } from "./files";
+import type { Forward, TunnelStatus } from "./tunnels";
 
 export type AuthMethod = "password" | "key";
 
@@ -16,6 +17,19 @@ export interface SavedSession {
   keyPath: string | null;
   autoOpenTailscale: boolean;
   autoLog: boolean;
+  /** Port forwards saved with the session. */
+  forwards: Forward[];
+  /** Another saved session to connect through first. */
+  jumpSession: string | null;
+}
+
+export interface JumpRequest {
+  sessionId: string | null;
+  host: string;
+  port: number;
+  username: string;
+  auth: AuthMethod;
+  keyPath: string | null;
 }
 
 export interface ConnectRequest {
@@ -30,6 +44,9 @@ export interface ConnectRequest {
   log: boolean;
   /** Names the log file; usually the session's name. */
   label: string;
+  /** Tunnels to start when the shell opens (those set to start automatically). */
+  forwards: Forward[];
+  jump: JumpRequest | null;
   cols: number;
   rows: number;
 }
@@ -57,6 +74,7 @@ export type ConnEvent =
   | { type: "prompt"; id: number; prompt: Prompt }
   | { type: "connected" }
   | { type: "logging"; path: string | null; error: string | null }
+  | { type: "tunnels"; tunnels: TunnelStatus[] }
   | { type: "closed"; error: string | null };
 
 export interface PromptAnswer {
@@ -112,6 +130,8 @@ export const api = {
     events.onmessage = onEvent;
     return invoke<number>("sftp_transfer", { id, ...t, events });
   },
+  startForward: (id: number, forward: Forward) => invoke<void>("start_forward", { id, forward }),
+  stopForward: (id: number, forward: string) => invoke<void>("stop_forward", { id, forward }),
   sftpCancel: (transfer: number) => invoke<void>("sftp_cancel", { transfer }),
   localKind: (path: string) => invoke<"file" | "dir" | "missing">("local_kind", { path }),
   defaultDownloadDir: () => invoke<string | null>("default_download_dir"),

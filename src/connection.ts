@@ -2,6 +2,7 @@
 // tested on its own. Each pane owns one Connection and supplies the hooks.
 
 import type { BannerLink, ConnEvent, ConnectRequest, Prompt } from "./api";
+import type { TunnelStatus } from "./tunnels";
 
 export type ConnState = "idle" | "busy" | "online" | "error";
 export type BaseRequest = Omit<ConnectRequest, "cols" | "rows">;
@@ -50,6 +51,8 @@ export class Connection {
   closed = true;
   /** Path of the log being written, if any. */
   logPath: string | null = null;
+  /** This connection's tunnels, as the backend last reported them. */
+  tunnels: TunnelStatus[] = [];
   private gen = 0;
 
   constructor(
@@ -94,6 +97,7 @@ export class Connection {
     this.connected = false;
     this.closed = false;
     this.logPath = null;
+    this.tunnels = [];
     this.hooks.reset();
     this.hooks.hideBanner();
     this.set("busy", "Connecting…");
@@ -131,6 +135,7 @@ export class Connection {
     this.closed = true;
     if (this.id !== null) this.api.disconnect(this.id);
     this.logPath = null;
+    this.tunnels = [];
     this.hooks.closePrompts();
     this.hooks.hideBanner();
     this.hooks.writeln(`\r\n${ansi.dim("Disconnected.")}`);
@@ -187,9 +192,14 @@ export class Connection {
         if (e.error) this.hooks.writeln(`\r\n${ansi.err(e.error)}`);
         this.hooks.changed();
         break;
+      case "tunnels":
+        this.tunnels = e.tunnels;
+        this.hooks.changed();
+        break;
       case "closed":
         this.closed = true;
         this.logPath = null;
+        this.tunnels = [];
         this.hooks.closePrompts();
         this.hooks.hideBanner();
         if (e.error) {
