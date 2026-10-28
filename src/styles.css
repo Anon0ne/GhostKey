@@ -420,6 +420,44 @@ input.invalid {
   border-color: rgba(54, 123, 240, 0.7);
 }
 
+.pane {
+  position: relative;
+}
+
+.pane-close {
+  display: none;
+  position: absolute;
+  top: 4px;
+  right: 16px; /* clear of the terminal's scrollbar */
+  z-index: 5;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.tab-body.multi .pane-close {
+  display: block;
+}
+
+.pane:hover .pane-close,
+.pane-close:focus-visible {
+  opacity: 1;
+}
+
+.pane-close:hover {
+  color: #fff;
+  border-color: var(--red);
+  background: var(--red);
+}
+
 .terminal {
   flex: 1;
   min-height: 0;

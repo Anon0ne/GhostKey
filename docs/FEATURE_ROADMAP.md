@@ -350,3 +350,7 @@ Copy this block into a dated entry below when starting or stopping work:
     no-SFTP message while the shell kept working. Drag and drop is not testable under
     Xvfb and needs a check on Windows and Linux desktops.
   - Not done: folder transfers, chmod, transfers that resume.
+- 2026-10-28 — Claude: per-pane × button (shown when a tab is split; disconnects and closes
+  the pane after a confirm if connected), on `pane-close`.
+  - UI rule from Justin: right-click in the terminal stays copy/paste. Any future menus go
+    in a top menu bar like a normal desktop program, not in a right-click menu.

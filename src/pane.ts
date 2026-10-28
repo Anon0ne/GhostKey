@@ -20,6 +20,8 @@ export interface PaneHost {
   changed(pane: Pane): void;
   /** Lets the app handle its own shortcuts; returns true when it did. */
   shortcut(pane: Pane, e: KeyboardEvent): boolean;
+  /** Disconnects and closes the pane, asking first if it's connected. */
+  close(pane: Pane): void;
 }
 
 // One login dialog at a time, so two panes asking at once can't mix up answers.
@@ -85,7 +87,10 @@ export class Pane {
     closeSearch.addEventListener("click", () => this.closeSearch());
     this.termEl = el("div", { class: "terminal" });
     this.body = el("div", { class: "pane-body" }, this.termEl);
-    this.el = el("div", { class: "pane" }, this.searchBar, this.banner, this.body);
+    // Shown only when the tab is split; a single pane closes with its tab.
+    const closePane = el("button", { class: "pane-close", type: "button", text: "×", title: "Close this pane (Ctrl+Shift+W)", "aria-label": "Close this pane" });
+    closePane.addEventListener("click", () => host.close(this));
+    this.el = el("div", { class: "pane" }, this.searchBar, closePane, this.banner, this.body);
 
     this.term = new Terminal({
       theme: kaliDark,
