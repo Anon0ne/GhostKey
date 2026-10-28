@@ -56,6 +56,7 @@ const host: PaneHost = {
     if (pane === activePane()) renderToolbar();
   },
   shortcut: (_pane, e) => shortcut(e),
+  close: (pane) => void closePane(pane),
 };
 
 function activePane(): Pane {
