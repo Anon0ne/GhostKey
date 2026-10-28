@@ -393,3 +393,12 @@ Copy this block into a dated entry below when starting or stopping work:
   accepted after Stop during remote setup. Added stream-level and live SSH
   regressions plus a pane-close callback test. Preparing v0.2.2; frontend tests
   and build pass locally; Rust/live SSH and both installer builds must pass CI.
+
+- 2026-10-28 — Anon0ne: terminal viewport regression reproduced in a real browser
+  at specific window heights. xterm's root element also uses the class `terminal`,
+  so GhostKey's container spacing applied twice, and the fit addon measured a
+  padded box. Renamed the outer class to terminal-container, moved spacing to
+  its margins, and enabled overflow-only terminal scrollbars. Added real Pane
+  browser tests for both split orientations, resizing, search, and mouse-wheel
+  scrollback. Both tests failed before the fix and pass locally in Chromium;
+  CI runs Chromium and WebKit plus existing checks. Preparing patch v0.2.3.

@@ -1,6 +1,6 @@
 [package]
 name = "ghostkey"
-version = "0.2.2"
+version = "0.2.3"
 description = "A modern SSH client with the Kali Linux terminal look"
 edition = "2021"
 rust-version = "1.80"

@@ -85,7 +85,7 @@ export class Pane {
     previous.addEventListener("click", () => this.find(true));
     next.addEventListener("click", () => this.find(false));
     closeSearch.addEventListener("click", () => this.closeSearch());
-    this.termEl = el("div", { class: "terminal" });
+    this.termEl = el("div", { class: "terminal-container" });
     this.body = el("div", { class: "pane-body" }, this.termEl);
     // Shown only when the tab is split; a single pane closes with its tab.
     const closePane = el("button", { class: "pane-close", type: "button", text: "×", title: "Close this pane (Ctrl+Shift+W)", "aria-label": "Close this pane" });
