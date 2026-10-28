@@ -342,19 +342,21 @@ export class FilePanel {
 
   private async newFolder() {
     const id = this.conn.id;
-    const name = await this.askName("New folder", `Name, in ${this.path}`, "", "Create");
+    const dir = this.path;
+    const name = await this.askName("New folder", `Name, in ${dir}`, "", "Create");
     if (name == null || id !== this.conn.id || id == null) return;
-    await this.run(() => api.sftpMkdir(id, remoteJoin(this.path, name)));
+    await this.run(() => api.sftpMkdir(id, remoteJoin(dir, name)));
   }
 
   private async renameSelected() {
     const [entry] = this.selection();
     const id = this.conn.id;
     if (!entry || id == null || this.selected.size !== 1) return;
+    const dir = this.path;
     const name = await this.askName(`Rename "${entry.name}"`, "New name", entry.name, "Rename");
     if (name == null || name === entry.name || id !== this.conn.id) return;
     await this.run(async () => {
-      await api.sftpRename(id, remoteJoin(this.path, entry.name), remoteJoin(this.path, name));
+      await api.sftpRename(id, remoteJoin(dir, entry.name), remoteJoin(dir, name));
       this.selected = new Set([name]);
       this.anchor = name;
     });
@@ -364,16 +366,16 @@ export class FilePanel {
     const sel = this.selection();
     const id = this.conn.id;
     if (sel.length === 0 || id == null) return;
+    const dir = this.path;
     const what = sel.length === 1 ? `"${sel[0].name}"` : `${sel.length} items`;
     const dirs = sel.some((e) => e.kind === "dir");
     const ok = await confirm(
       `Delete ${what}?`,
-      `This deletes from ${this.conn.title}:${this.path} and can't be undone.${dirs ? " Folders must be empty." : ""}`,
+      `This deletes from ${this.conn.title}:${dir} and can't be undone.${dirs ? " Folders must be empty." : ""}`,
       "Delete",
       true,
     );
-    if (!ok || id !== this.conn.id) return;
-    const dir = this.path;
+    if (!ok || id !== this.conn.id || !this.conn.online) return;
     await this.run(async () => {
       const failed: string[] = [];
       for (const e of sel) {
@@ -395,6 +397,7 @@ export class FilePanel {
 
   private async download(entries: Entry[]) {
     const id = this.conn.id;
+    const dir = this.path;
     const files = entries.filter((e) => !isDir(e));
     if (id == null || files.length === 0) return;
     const start = downloadDir ?? (await api.defaultDownloadDir().catch(() => null)) ?? undefined;
@@ -416,13 +419,16 @@ export class FilePanel {
         if (!decision.replace) continue;
         overwrite = true;
       }
-      this.startTransfer(id, `↓ ${e.name}`, { upload: false, local, remote: remoteJoin(this.path, e.name), overwrite }, `Saved to ${picked}`);
+      if (id !== this.conn.id || !this.conn.online) return;
+      this.startTransfer(id, `↓ ${e.name}`, { upload: false, local, remote: remoteJoin(dir, e.name), overwrite }, `Saved to ${picked}`);
     }
   }
 
   private async chooseUploads() {
+    const id = this.conn.id;
+    const dir = this.path;
     const picked = await openDialog({ multiple: true, directory: false, title: `Upload to ${this.path}` });
-    if (!picked) return;
+    if (!picked || id !== this.conn.id || dir !== this.path || !this.conn.online) return;
     await this.uploadPaths(Array.isArray(picked) ? picked : [picked]);
   }
 

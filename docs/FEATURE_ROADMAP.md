@@ -350,6 +350,14 @@ Copy this block into a dated entry below when starting or stopping work:
     no-SFTP message while the shell kept working. Drag and drop is not testable under
     Xvfb and needs a check on Windows and Linux desktops.
   - Not done: folder transfers, chmod, transfers that resume.
+- 2026-10-27 — Anon0ne, post-merge F03 review: preparing v0.2.1 after #10.
+  Regression tests reproduced folder changes redirecting download/delete dialogs and
+  upload pickers carrying across reconnects. Operations now retain their original
+  directory or cancel if an upload picker outlives its destination. Transfers use
+  unique, exclusively created temporary files rather than sharing a fixed suffix;
+  no-overwrite downloads also refuse destinations created during the transfer.
+  Frontend tests/build pass locally; Rust/live SSH and both platform packages are
+  verified by CI before release. Desktop drag/drop smoke testing remains pending.
 - 2026-10-28 — Claude: per-pane × button (shown when a tab is split; disconnects and closes
   the pane after a confirm if connected), on `pane-close`.
   - UI rule from Justin: right-click in the terminal stays copy/paste. Any future menus go

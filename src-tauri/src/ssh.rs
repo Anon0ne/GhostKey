@@ -1072,10 +1072,13 @@ mod live {
             (data.len() as u64, data.len() as u64)
         );
         let back = dir.path().join("back.bin");
+        let existing_part = dir.path().join("back.bin.ghostkey-part");
+        std::fs::write(&existing_part, b"unrelated file").unwrap();
         crate::sftp::download(&s, &remote, &back, false, &cancel, &progress)
             .await
             .unwrap();
         assert_eq!(std::fs::read(&back).unwrap(), data);
+        assert_eq!(std::fs::read(&existing_part).unwrap(), b"unrelated file");
 
         // Existing files are only replaced when asked, and keep their permissions.
         let e = crate::sftp::upload(&s, &local, &remote, false, &cancel, &progress)
