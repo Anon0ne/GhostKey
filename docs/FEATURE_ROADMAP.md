@@ -402,3 +402,12 @@ Copy this block into a dated entry below when starting or stopping work:
   browser tests for both split orientations, resizing, search, and mouse-wheel
   scrollback. Both tests failed before the fix and pass locally in Chromium;
   CI runs Chromium and WebKit plus existing checks. Preparing patch v0.2.3.
+
+- 2026-10-28 — Anon0ne: reproduced Enter being ignored after paste approval in
+  the real-browser fixture: removing the dialog left the terminal textarea
+  unfocused. Paste completion/cancellation now restores focus only when the
+  original connection is still online and the pane remains selected without
+  another modal open. Added browser coverage for approval followed by Enter
+  and right-click clipboard paste, plus focus guards for reconnect/dispose and
+  pane/dialog changes. Both new browser checks and 54 frontend tests pass
+  locally in Chromium; CI verifies WebKit and platform builds for v0.2.4.

@@ -58,6 +58,7 @@ const host: PaneHost = {
   },
   shortcut: (_pane, e) => shortcut(e),
   close: (pane) => void closePane(pane),
+  canFocus: (pane) => pane === activePane() && !document.querySelector(".backdrop"),
 };
 
 function activePane(): Pane {
