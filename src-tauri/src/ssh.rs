@@ -1469,7 +1469,9 @@ mod live {
             let (mut c, _) = echo.accept().await.unwrap();
             c.write_all(b"hello from here").await.unwrap();
             let mut byte = [0u8; 1];
-            tokio::io::AsyncReadExt::read(&mut c, &mut byte).await.unwrap()
+            tokio::io::AsyncReadExt::read(&mut c, &mut byte)
+                .await
+                .unwrap()
         });
         let remote = fwd(ForwardKind::Remote, free_port(), echo_port);
         ssh.start_forward(id, remote.clone());
