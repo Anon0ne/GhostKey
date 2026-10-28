@@ -358,6 +358,10 @@ Copy this block into a dated entry below when starting or stopping work:
   no-overwrite downloads also refuse destinations created during the transfer.
   Frontend tests/build pass locally; Rust/live SSH and both platform packages are
   verified by CI before release. Desktop drag/drop smoke testing remains pending.
+- 2026-10-28 — Claude: per-pane × button (shown when a tab is split; disconnects and closes
+  the pane after a confirm if connected), on `pane-close`.
+  - UI rule from Justin: right-click in the terminal stays copy/paste. Any future menus go
+    in a top menu bar like a normal desktop program, not in a right-click menu.
 - 2026-10-28 — Claude: #10 merged (F03 Done). Started F04 on `forwarding` from 82d8889.
   First step, per the spec's "bounded tunnel type": local forwards (-L) saved with a
   session, loopback by default, shown in the toolbar with stop controls. Then jump hosts
