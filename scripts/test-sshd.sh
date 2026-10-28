@@ -25,6 +25,7 @@ PasswordAuthentication yes
 KbdInteractiveAuthentication yes
 PubkeyAuthentication yes
 UsePAM yes
+Subsystem sftp internal-sftp
 Banner $dir/banner
 CONF
 

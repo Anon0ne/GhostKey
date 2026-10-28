@@ -261,6 +261,7 @@ function renderToolbar() {
   rec.hidden = !conn.logPath;
   rec.title = conn.logPath ? `Logging to ${conn.logPath}` : "";
   for (const b of document.querySelectorAll<HTMLButtonElement>("#snippet-favorites button")) b.disabled = !conn.online;
+  $("files-toggle").setAttribute("aria-pressed", String(activePane().filesOpen));
 }
 
 function shortcut(e: KeyboardEvent): boolean {
@@ -298,6 +299,9 @@ function shortcut(e: KeyboardEvent): boolean {
         return true;
       case "KeyS":
         openSnippets();
+        return true;
+      case "KeyE":
+        activePane().toggleFiles();
         return true;
     }
   }
@@ -942,6 +946,7 @@ $("disconnect").addEventListener("click", () => activePane().conn.disconnect());
 $("reconnect").addEventListener("click", () => activePane().conn.retry());
 $("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
 $("terminal-find").addEventListener("click", () => activePane().openSearch());
+$("files-toggle").addEventListener("click", () => activePane().toggleFiles());
 $("split-right").addEventListener("click", () => splitPane("row"));
 $("split-down").addEventListener("click", () => splitPane("column"));
 

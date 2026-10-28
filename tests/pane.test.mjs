@@ -113,7 +113,7 @@ test('closing a pane cancels an open preview', async () => {
 
 test('native paste is captured before xterm and uses the same preview', async () => {
   const h = harness();
-  const terminal = h.pane.el.children.at(-1);
+  const terminal = h.pane.el.children.at(-1).children[0];
   assert.equal(terminal.handlers.paste.capture, true);
   let prevented = false, stopped = false;
   terminal.fire('paste', {

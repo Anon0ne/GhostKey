@@ -892,3 +892,210 @@ textarea.snippet-input:focus {
   font-family: var(--mono);
   user-select: text;
 }
+
+/* ------------------------------------------------------------ SFTP file panel */
+
+.pane-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.pane-body .terminal {
+  min-width: 0;
+}
+
+#files-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.files {
+  width: min(340px, 45%);
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: var(--bg-deep);
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  min-height: 0;
+}
+
+.files.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: rgba(54, 123, 240, 0.08);
+}
+
+.files-bar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.files-path {
+  flex: 1;
+  min-width: 0;
+  font: 12px var(--mono);
+}
+
+.files-message {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.files-list {
+  flex: 1;
+  min-height: 80px;
+  overflow: auto;
+  outline: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  user-select: none;
+}
+
+.files-list:focus-visible {
+  border-color: var(--accent);
+}
+
+.files-list[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+.files-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 8px;
+  cursor: default;
+}
+
+.files-row:hover {
+  background: var(--panel-hover);
+}
+
+.files-row.selected {
+  background: rgba(54, 123, 240, 0.3);
+}
+
+.files-icon {
+  width: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.files-icon.dir {
+  color: var(--accent);
+}
+
+.files-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.files-size {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.files-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.files-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.files-transfers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 30%;
+  overflow: auto;
+}
+
+.files-transfer {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.files-transfer-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.files-transfer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-progress {
+  height: 4px;
+  margin: 4px 0;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.files-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+}
+
+.files-transfer-info {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.files-transfer.done .files-progress-bar {
+  background: var(--green);
+}
+
+.files-transfer.failed .files-progress-bar,
+.files-transfer.cancelled .files-progress-bar {
+  background: var(--red);
+  width: 100%;
+}
+
+.files-transfer.failed .files-transfer-info {
+  color: #ff8a8a;
+}
+
+.files .btn:disabled,
+.files .icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.files-row * {
+  user-select: none;
+}

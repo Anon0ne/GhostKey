@@ -12,6 +12,7 @@ use std::time::Duration;
 use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::keys::{self, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, Disconnect, MethodKind, MethodSet};
+use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -142,6 +143,8 @@ enum ConnCmd {
     Resize(u32, u32),
     StartLog,
     StopLog,
+    /// Opens an SFTP channel next to the shell.
+    OpenSftp(oneshot::Sender<anyhow::Result<SftpSession>>),
     Close,
 }
 
@@ -154,6 +157,8 @@ struct ConnEntry {
 pub struct Ssh {
     next_id: AtomicU32,
     conns: Mutex<HashMap<u32, ConnEntry>>,
+    /// One SFTP session per connection, opened on first use.
+    sftp: tokio::sync::Mutex<HashMap<u32, Arc<SftpSession>>>,
     prompts: Arc<Mutex<HashMap<u32, oneshot::Sender<PromptAnswer>>>>,
     known_hosts: PathBuf,
     log_dir: Arc<Mutex<PathBuf>>,
@@ -164,6 +169,7 @@ impl Ssh {
         Self {
             next_id: AtomicU32::new(1),
             conns: Mutex::new(HashMap::new()),
+            sftp: tokio::sync::Mutex::new(HashMap::new()),
             prompts: Arc::new(Mutex::new(HashMap::new())),
             known_hosts,
             log_dir: Arc::new(Mutex::new(log_dir)),
@@ -206,6 +212,7 @@ impl Ssh {
             let error = run(ctx, rx).await.err().map(|e| format!("{e:#}"));
             sinks.event(ConnEvent::Closed { error });
             this.conns.lock().unwrap().remove(&id);
+            this.sftp.lock().await.remove(&id);
             this.prompts
                 .lock()
                 .unwrap()
@@ -240,6 +247,29 @@ impl Ssh {
             .lock()
             .unwrap()
             .retain(|k, _| prompt_conn(*k) != id);
+    }
+
+    /// The connection's SFTP session, opened on first use. Fails when the
+    /// connection is gone or the server has no SFTP; the shell is unaffected.
+    pub async fn sftp(&self, id: u32) -> anyhow::Result<Arc<SftpSession>> {
+        // Held across the open, so two calls can't open two sessions.
+        let mut sessions = self.sftp.lock().await;
+        if let Some(s) = sessions.get(&id) {
+            return Ok(s.clone());
+        }
+        let (tx, rx) = oneshot::channel();
+        self.send(id, ConnCmd::OpenSftp(tx));
+        let session = Arc::new(
+            rx.await
+                .map_err(|_| anyhow::anyhow!("The session is not connected"))??,
+        );
+        sessions.insert(id, session.clone());
+        Ok(session)
+    }
+
+    /// Forgets a broken SFTP session, so the next call opens a new one.
+    pub async fn drop_sftp(&self, id: u32) {
+        self.sftp.lock().await.remove(&id);
     }
 
     pub fn answer(&self, prompt_id: u32, answer: PromptAnswer) {
@@ -467,6 +497,7 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
         anyhow::bail!("Login failed: no more login methods to try");
     }
 
+    let handle = Arc::new(handle);
     let channel = handle.channel_open_session().await?;
     channel
         .request_pty(true, "xterm-256color", req.cols, req.rows, 0, 0, &[])
@@ -501,6 +532,13 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
                 }
                 Some(ConnCmd::StartLog) => ctx.start_log(&mut log),
                 Some(ConnCmd::StopLog) => stop_log(&ctx, &mut log),
+                Some(ConnCmd::OpenSftp(reply)) => {
+                    // Opened in its own task, so the terminal keeps flowing meanwhile.
+                    let handle = handle.clone();
+                    tokio::spawn(async move {
+                        let _ = reply.send(open_sftp(&handle).await);
+                    });
+                }
                 Some(ConnCmd::Close) | None => {
                     let _ = writer.close().await;
                     break;
@@ -511,6 +549,27 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     stop_log(&ctx, &mut log);
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
     Ok(())
+}
+
+async fn open_sftp(handle: &client::Handle<Handler>) -> anyhow::Result<SftpSession> {
+    const NO_SFTP: &str =
+        "This server doesn't offer SFTP, so files can't be browsed here. The terminal still works.";
+    let mut channel = handle.channel_open_session().await?;
+    channel.request_subsystem(true, "sftp").await?;
+    // Wait for the server's answer, so a refusal shows at once instead of as a timeout.
+    loop {
+        match tokio::time::timeout(CONNECT_TIMEOUT, channel.wait()).await {
+            Ok(Some(ChannelMsg::Success)) => break,
+            Ok(Some(ChannelMsg::Failure)) | Ok(Some(ChannelMsg::Close)) | Ok(None) => {
+                anyhow::bail!(NO_SFTP)
+            }
+            Ok(Some(_)) => continue,
+            Err(_) => anyhow::bail!("The server didn't answer the SFTP request"),
+        }
+    }
+    SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|e| anyhow::anyhow!("SFTP didn't start: {e}"))
 }
 
 /// Tries "none" first (Tailscale SSH logs in this way, after any check-mode
@@ -734,6 +793,7 @@ mod tests {
 #[cfg(test)]
 mod live {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex as StdMutex;
     use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -964,5 +1024,122 @@ mod live {
         let (kinds, _, closed) = drive(&ssh, &mut rx, |p| panic!("unexpected prompt {p:?}")).await;
         assert!(kinds.is_empty());
         assert!(closed.flatten().unwrap_or_default().contains("CHANGED"));
+    }
+
+    #[tokio::test]
+    async fn sftp_round_trip_overwrite_and_cancel() {
+        let Some(env) = env() else {
+            eprintln!("GHOSTKEY_TEST_HOST not set; skipping live SFTP tests");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(
+            dir.path().join("known_hosts"),
+            dir.path().join("logs"),
+        ));
+        let (id, mut rx) = start(
+            &ssh,
+            &env,
+            AuthMethod::Password,
+            Arc::new(StdMutex::new(Vec::new())),
+        );
+        let pw = env.password.clone();
+        let (_, _, closed) = drive(&ssh, &mut rx, |p| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            _ => yes(&[&pw]),
+        })
+        .await;
+        assert_eq!(closed, None, "login failed");
+
+        let s = ssh.sftp(id).await.expect("open sftp");
+        let home = crate::sftp::list(&s, "").await.unwrap().path;
+        let work = crate::sftp::join(&home, &format!("gk-sftp-{}", Uuid::new_v4()));
+        s.create_dir(work.clone()).await.unwrap();
+
+        // Binary data, larger than one chunk, survives a round trip.
+        let data: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 256) as u8).collect();
+        let local = dir.path().join("blob.bin");
+        std::fs::write(&local, &data).unwrap();
+        let remote = crate::sftp::join(&work, "blob.bin");
+        let cancel = AtomicBool::new(false);
+        let last = StdMutex::new((0, 0));
+        let progress = |d, t| *last.lock().unwrap() = (d, t);
+        crate::sftp::upload(&s, &local, &remote, false, &cancel, &progress)
+            .await
+            .unwrap();
+        assert_eq!(
+            *last.lock().unwrap(),
+            (data.len() as u64, data.len() as u64)
+        );
+        let back = dir.path().join("back.bin");
+        crate::sftp::download(&s, &remote, &back, false, &cancel, &progress)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&back).unwrap(), data);
+
+        // Existing files are only replaced when asked, and keep their permissions.
+        let e = crate::sftp::upload(&s, &local, &remote, false, &cancel, &progress)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("already exists"), "{e}");
+        assert!(
+            crate::sftp::download(&s, &remote, &back, false, &cancel, &progress)
+                .await
+                .is_err()
+        );
+        let attrs = russh_sftp::protocol::FileAttributes {
+            permissions: Some(0o640),
+            ..russh_sftp::protocol::FileAttributes::empty()
+        };
+        s.set_metadata(remote.clone(), attrs).await.unwrap();
+        std::fs::write(&local, b"new").unwrap();
+        crate::sftp::upload(&s, &local, &remote, true, &cancel, &progress)
+            .await
+            .unwrap();
+        let meta = s.metadata(remote.clone()).await.unwrap();
+        assert_eq!(meta.size, Some(3));
+        assert_eq!(meta.permissions.unwrap() & 0o777, 0o640);
+        crate::sftp::download(&s, &remote, &back, true, &cancel, &progress)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&back).unwrap(), b"new");
+
+        // A cancelled transfer leaves nothing behind, under either name.
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let other = crate::sftp::join(&work, "cancelled.bin");
+        let e = crate::sftp::upload(&s, &local, &other, false, &cancel, &progress)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            crate::sftp::outcome(Err(e)),
+            crate::sftp::TransferEvent::Cancelled
+        ));
+        let names: Vec<_> = crate::sftp::list(&s, &work)
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, ["blob.bin"]);
+        let gone = dir.path().join("gone.bin");
+        assert!(
+            crate::sftp::download(&s, &remote, &gone, false, &cancel, &progress)
+                .await
+                .is_err()
+        );
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("gone")));
+
+        s.remove_file(remote).await.unwrap();
+        s.remove_dir(work).await.unwrap();
+
+        // The shell still works alongside SFTP.
+        ssh.input(id, b"echo GK_$((40+3))\n".to_vec());
+        expect_output(&mut rx, "GK_43").await;
+        ssh.close(id);
     }
 }

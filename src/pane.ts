@@ -8,6 +8,7 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import { api, type BannerLink, type Prompt, type PromptAnswer } from "./api";
 import { ansi, Connection, type BaseRequest } from "./connection";
+import { FilePanel } from "./filePanel";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { needsPastePreview, pasteLineCount, pastePreview } from "./paste";
 import { FONT_FAMILY, kaliDark } from "./theme";
@@ -38,6 +39,8 @@ export class Pane {
   private searchStatus: HTMLElement;
   private pastePending = false;
   private termEl: HTMLElement;
+  private body: HTMLElement;
+  private files: FilePanel | null = null;
   private banner: HTMLElement;
   private bannerText: HTMLElement;
   private bannerLinks: HTMLElement;
@@ -81,7 +84,8 @@ export class Pane {
     next.addEventListener("click", () => this.find(false));
     closeSearch.addEventListener("click", () => this.closeSearch());
     this.termEl = el("div", { class: "terminal" });
-    this.el = el("div", { class: "pane" }, this.searchBar, this.banner, this.termEl);
+    this.body = el("div", { class: "pane-body" }, this.termEl);
+    this.el = el("div", { class: "pane" }, this.searchBar, this.banner, this.body);
 
     this.term = new Terminal({
       theme: kaliDark,
@@ -117,7 +121,10 @@ export class Pane {
       hideBanner: () => (this.banner.hidden = true),
       prompt: (id, prompt) => this.prompt(id, prompt),
       closePrompts: () => this.closePrompts(),
-      changed: () => host.changed(this),
+      changed: () => {
+        this.files?.sync();
+        host.changed(this);
+      },
     });
 
     this.term.onData((data) => this.conn.input(data));
@@ -269,7 +276,27 @@ export class Pane {
     this.searchStatus.textContent = found ? "Match selected" : "No matches";
   }
 
+  get filesOpen() {
+    return this.files !== null;
+  }
+
+  /** Shows or hides the SFTP file panel beside the terminal. */
+  toggleFiles() {
+    if (this.files) {
+      this.files.dispose();
+      this.files = null;
+      this.focus();
+    } else {
+      this.files = new FilePanel(this.conn, () => this.toggleFiles());
+      this.body.append(this.files.el);
+      this.files.focus();
+    }
+    this.fit();
+    this.host.changed(this);
+  }
+
   dispose() {
+    this.files?.dispose();
     this.disposed = true;
     this.conn.disconnect();
     this.closePrompts();

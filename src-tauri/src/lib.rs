@@ -5,6 +5,7 @@ mod logging;
 mod secrets;
 mod sessions;
 mod settings;
+mod sftp;
 mod snippets;
 mod ssh;
 
@@ -17,6 +18,7 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use sessions::{SavedSession, SessionStore};
+use sftp::{Listing, TransferEvent, Transfers};
 use snippets::{Snippet, SnippetStore};
 use ssh::{ConnEvent, ConnectRequest, PromptAnswer, Sinks, Ssh};
 
@@ -139,6 +141,122 @@ impl SettingsState {
     }
 }
 
+/// Runs an SFTP operation on a connection. A broken channel is forgotten, so the
+/// next call opens a fresh one.
+async fn with_sftp<T, F, Fut>(ssh: &Ssh, id: u32, op: F) -> CmdResult<T>
+where
+    F: FnOnce(Arc<russh_sftp::client::SftpSession>) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let session = ssh.sftp(id).await.map_err(err)?;
+    match op(session).await {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if matches!(
+                e.downcast_ref(),
+                Some(russh_sftp::client::error::Error::IO(_))
+            ) || matches!(
+                e.downcast_ref(),
+                Some(russh_sftp::client::error::Error::Timeout)
+            ) {
+                ssh.drop_sftp(id).await;
+            }
+            Err(format!("{e:#}"))
+        }
+    }
+}
+
+#[tauri::command]
+async fn sftp_list(ssh: State<'_, Arc<Ssh>>, id: u32, path: String) -> CmdResult<Listing> {
+    with_sftp(&ssh, id, |s| async move { sftp::list(&s, &path).await }).await
+}
+
+#[tauri::command]
+async fn sftp_mkdir(ssh: State<'_, Arc<Ssh>>, id: u32, path: String) -> CmdResult<()> {
+    with_sftp(&ssh, id, |s| async move { Ok(s.create_dir(path).await?) }).await
+}
+
+#[tauri::command]
+async fn sftp_rename(ssh: State<'_, Arc<Ssh>>, id: u32, from: String, to: String) -> CmdResult<()> {
+    with_sftp(&ssh, id, |s| async move {
+        if s.try_exists(to.clone()).await? {
+            anyhow::bail!("{to} already exists");
+        }
+        Ok(s.rename(from, to).await?)
+    })
+    .await
+}
+
+/// Deletes a file, or a folder that is already empty.
+#[tauri::command]
+async fn sftp_remove(ssh: State<'_, Arc<Ssh>>, id: u32, path: String, dir: bool) -> CmdResult<()> {
+    with_sftp(&ssh, id, |s| async move {
+        if dir {
+            s.remove_dir(path).await?;
+        } else {
+            s.remove_file(path).await?;
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_exists(ssh: State<'_, Arc<Ssh>>, id: u32, path: String) -> CmdResult<bool> {
+    with_sftp(&ssh, id, |s| async move { Ok(s.try_exists(path).await?) }).await
+}
+
+/// "file", "dir", or "missing", for overwrite checks and dropped paths.
+#[tauri::command]
+fn local_kind(path: PathBuf) -> &'static str {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => "dir",
+        Ok(_) => "file",
+        Err(_) => "missing",
+    }
+}
+
+#[tauri::command]
+fn default_download_dir() -> Option<PathBuf> {
+    dirs::download_dir().or_else(dirs::home_dir)
+}
+
+/// Starts a transfer and returns its id at once; progress and the result arrive on `events`.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+async fn sftp_transfer(
+    ssh: State<'_, Arc<Ssh>>,
+    transfers: State<'_, Arc<Transfers>>,
+    id: u32,
+    upload: bool,
+    local: PathBuf,
+    remote: String,
+    overwrite: bool,
+    events: Channel<TransferEvent>,
+) -> CmdResult<u32> {
+    let session = ssh.sftp(id).await.map_err(err)?;
+    let (tid, cancel) = transfers.start();
+    let transfers = Arc::clone(&transfers);
+    tauri::async_runtime::spawn(async move {
+        let progress = |done, total| {
+            let _ = events.send(TransferEvent::Progress { done, total });
+        };
+        let result = if upload {
+            sftp::upload(&session, &local, &remote, overwrite, &cancel, &progress).await
+        } else {
+            sftp::download(&session, &remote, &local, overwrite, &cancel, &progress).await
+        };
+        transfers.finish(tid);
+        let _ = events.send(sftp::outcome(result));
+    });
+    Ok(tid)
+}
+
+#[tauri::command]
+fn sftp_cancel(transfers: State<'_, Arc<Transfers>>, transfer: u32) {
+    transfers.cancel(transfer);
+}
+
 #[tauri::command]
 fn start_log(ssh: State<'_, Arc<Ssh>>, id: u32) {
     ssh.start_log(id);
@@ -215,11 +333,21 @@ pub fn run() {
             };
             app.manage(SessionStore::new(dir.join("sessions.json")));
             app.manage(SnippetStore::new(dir.join("snippets.json")));
+            app.manage(Arc::new(Transfers::default()));
             app.manage(Arc::new(Ssh::new(dir.join("known_hosts"), state.log_dir())));
             app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            sftp_list,
+            sftp_mkdir,
+            sftp_rename,
+            sftp_remove,
+            sftp_exists,
+            sftp_transfer,
+            sftp_cancel,
+            local_kind,
+            default_download_dir,
             list_sessions,
             save_session,
             delete_session,
