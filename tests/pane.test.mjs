@@ -30,12 +30,12 @@ function harness() {
   const modals = [], terminals = [], searches = [];
   let clipboard = 'echo one\necho two';
   class Terminal {
-    options = {}; cols = 80; rows = 24; pasted = []; textarea = node('textarea');
+    options = {}; focusCalls = 0; cols = 80; rows = 24; pasted = []; textarea = node('textarea');
     constructor() { terminals.push(this); }
     loadAddon() {} open() {} onData(fn) { this.data = fn; } onResize() {}
     attachCustomKeyEventHandler(fn) { this.key = fn; }
     paste(text) { this.pasted.push(text); }
-    hasSelection() { return false; } focus() {} reset() {} dispose() {} clearSelection() {}
+    hasSelection() { return false; } focus() { this.focusCalls++; } reset() {} dispose() {} clearSelection() {}
   }
   class Connection {
     request = { host: 'example', username: 'alice', port: 22 }; id = 1; online = true; title = 'Lab';
@@ -177,4 +177,39 @@ test('split-pane close button delegates to the app confirmation and cleanup flow
   close.fire('click');
   assert.deepEqual(h.closed, [h.pane]);
   assert.equal(h.pane.conn.online, true);
+});
+
+
+test('paste approval and cancellation restore keyboard focus to the terminal', async () => {
+  const h = harness();
+  const approved = h.pane.pasteText('one\ntwo');
+  h.modals[0].approve();
+  await approved;
+  assert.equal(h.terminals[0].focusCalls, 1);
+  const cancelled = h.pane.pasteText('three\nfour');
+  h.modals[1].close();
+  await cancelled;
+  assert.equal(h.terminals[0].focusCalls, 2);
+  assert.deepEqual(h.terminals[0].pasted, ['one\ntwo']);
+});
+
+test('paste never steals focus from another pane or dialog', async () => {
+  const h = harness();
+  h.pane.host.canFocus = () => false;
+  await h.pane.pasteText('echo hello');
+  assert.equal(h.terminals[0].focusCalls, 0);
+  assert.deepEqual(h.terminals[0].pasted, ['echo hello']);
+});
+
+test('reconnected or disposed panes do not regain focus from an old preview', async () => {
+  const h = harness();
+  const pending = h.pane.pasteText('one\ntwo');
+  h.pane.conn.request = { ...h.pane.conn.request };
+  h.modals[0].approve();
+  await pending;
+  assert.equal(h.terminals[0].focusCalls, 0);
+  const another = h.pane.pasteText('three\nfour');
+  h.pane.dispose();
+  await another;
+  assert.equal(h.terminals[0].focusCalls, 0);
 });

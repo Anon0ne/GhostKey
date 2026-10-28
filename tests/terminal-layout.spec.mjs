@@ -51,3 +51,39 @@ test('scrollback stays available without an always-present empty scrollbar', asy
     return buffer.viewportY === buffer.baseY;
   })).toBe(true);
 });
+
+test('approving pasted commands restores terminal focus so Enter reaches SSH', async ({ page }) => {
+  await page.goto('/tests/fixtures/terminal-layout.html');
+  await page.waitForFunction(() => window.ready);
+  await page.evaluate(() => {
+    const pane = window.layout.panes[0];
+    Object.assign(pane.conn, { request: { username: 'test', host: 'example', port: 22 }, id: 1, connected: true, closed: false });
+    window.receivedInput = [];
+    pane.conn.input = (text) => window.receivedInput.push(text);
+    pane.focus();
+    window.pasteFinished = pane.pasteText('echo one\necho two');
+  });
+  await page.getByRole('button', { name: 'Paste to this terminal', exact: true }).click();
+  await page.evaluate(() => window.pasteFinished);
+  await expect(page.locator('.xterm-helper-textarea').first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.receivedInput.at(-1))).toBe('\r');
+});
+
+test('right-click clipboard paste accepts Enter without an extra click', async ({ page }) => {
+  await page.goto('/tests/fixtures/terminal-layout.html');
+  await page.waitForFunction(() => window.ready);
+  await page.evaluate(() => {
+    window.__TAURI_INTERNALS__ = { invoke: async () => 'echo clipboard' };
+    const pane = window.layout.panes[0];
+    Object.assign(pane.conn, { request: { username: 'test', host: 'example', port: 22 }, id: 1, connected: true, closed: false });
+    window.receivedInput = [];
+    pane.conn.input = (text) => window.receivedInput.push(text);
+    window.layout.panes[1].focus();
+  });
+  await page.locator('.xterm-screen').first().click({ button: 'right' });
+  await expect.poll(() => page.evaluate(() => window.receivedInput.includes('echo clipboard'))).toBe(true);
+  await expect(page.locator('.xterm-helper-textarea').first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.receivedInput.at(-1))).toBe('\r');
+});
