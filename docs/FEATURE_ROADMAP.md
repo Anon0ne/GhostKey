@@ -385,3 +385,11 @@ Copy this block into a dated entry below when starting or stopping work:
   the pane after a confirm if connected), on `pane-close`.
   - UI rule from Justin: right-click in the terminal stays copy/paste. Any future menus go
     in a top menu bar like a normal desktop program, not in a right-click menu.
+
+- 2026-10-27 — Anon0ne, release integration: merged #12's split-pane close controls
+  and retained both handoff blocks while updating #13 from main. Review found that
+  accepted remote-forward connections outlived Stop. A per-tunnel cancellation
+  signal now closes those streams, rejects late arrivals, and cancels listeners
+  accepted after Stop during remote setup. Added stream-level and live SSH
+  regressions plus a pane-close callback test. Preparing v0.2.2; frontend tests
+  and build pass locally; Rust/live SSH and both installer builds must pass CI.

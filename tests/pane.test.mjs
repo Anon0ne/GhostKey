@@ -65,8 +65,9 @@ function harness() {
     './theme': {}, './api': { api: {} },
   });
   globalThis.ResizeObserver = class { observe() {} disconnect() {} };
-  const host = { fontSize: () => 14, activate() {}, changed() {}, shortcut: () => false };
-  return { pane: new Pane(host), another: () => new Pane(host), modals, terminals, searches,
+  const closed = [];
+  const host = { close: (pane) => closed.push(pane), fontSize: () => 14, activate() {}, changed() {}, shortcut: () => false };
+  return { pane: new Pane(host), another: () => new Pane(host), modals, terminals, searches, closed,
     clipboard: (text) => { clipboard = text; } };
 }
 
@@ -167,4 +168,13 @@ test('search stays per-pane, uses literal matching, and supports navigation and 
   assert.equal(bar.hidden, true);
   assert.equal(status.textContent, '');
   assert.deepEqual(h.searches[1].calls, []);
+});
+
+
+test('split-pane close button delegates to the app confirmation and cleanup flow', () => {
+  const h = harness();
+  const close = h.pane.el.children.find((n) => n.class === 'pane-close');
+  close.fire('click');
+  assert.deepEqual(h.closed, [h.pane]);
+  assert.equal(h.pane.conn.online, true);
 });

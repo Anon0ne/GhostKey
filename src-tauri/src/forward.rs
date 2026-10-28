@@ -11,6 +11,7 @@ use russh::client;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -119,6 +120,7 @@ impl Board {
         Reporter {
             board: self.clone(),
             id,
+            stopped: watch::channel(false).0,
         }
     }
 }
@@ -128,6 +130,7 @@ impl Board {
 pub struct Reporter {
     board: Board,
     id: Uuid,
+    stopped: watch::Sender<bool>,
 }
 
 impl Reporter {
@@ -166,8 +169,16 @@ impl Reporter {
         A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
         B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
+        let mut stopped = self.stopped.subscribe();
+        if *stopped.borrow() {
+            return;
+        }
         self.opened();
-        let _ = tokio::io::copy_bidirectional(&mut a, &mut b).await;
+        tokio::select! {
+            biased;
+            _ = stopped.changed() => {}
+            _ = tokio::io::copy_bidirectional(&mut a, &mut b) => {}
+        }
         self.closed();
     }
 }
@@ -187,7 +198,16 @@ pub async fn serve_remote<S>(target: RemoteTarget, channel: S)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    match TcpStream::connect((target.host.as_str(), target.port)).await {
+    let mut stopped = target.reporter.stopped.subscribe();
+    if *stopped.borrow() {
+        return;
+    }
+    let connection = tokio::select! {
+        biased;
+        _ = stopped.changed() => return,
+        result = TcpStream::connect((target.host.as_str(), target.port)) => result,
+    };
+    match connection {
         Ok(sock) => target.reporter.carry(sock, channel).await,
         Err(e) => target.reporter.connection_error(format!(
             "Couldn't reach {}:{} from this computer: {e}",
@@ -200,7 +220,8 @@ pub struct Tunnels<H: client::Handler> {
     handle: Arc<client::Handle<H>>,
     remote: RemoteTargets,
     board: Board,
-    tasks: HashMap<Uuid, JoinHandle<()>>,
+    tasks: HashMap<Uuid, (ForwardKind, JoinHandle<()>)>,
+    cancellations: HashMap<Uuid, watch::Sender<bool>>,
 }
 
 impl<H: client::Handler + 'static> Tunnels<H> {
@@ -213,6 +234,7 @@ impl<H: client::Handler + 'static> Tunnels<H> {
                 emit,
             },
             tasks: HashMap::new(),
+            cancellations: HashMap::new(),
         }
     }
 
@@ -229,6 +251,7 @@ impl<H: client::Handler + 'static> Tunnels<H> {
         };
         self.board.tunnels.lock().unwrap().push(status.clone());
         let reporter = self.board.reporter(id);
+        self.cancellations.insert(id, reporter.stopped.clone());
         if let Err(e) = forward.validate() {
             reporter.failed(e);
             return;
@@ -236,7 +259,8 @@ impl<H: client::Handler + 'static> Tunnels<H> {
         // Show it as starting right away.
         reporter.board.update(id, |_| {});
         let handle = self.handle.clone();
-        let task = match forward.kind {
+        let kind = forward.kind;
+        let task = match kind {
             ForwardKind::Local | ForwardKind::Dynamic => {
                 tokio::spawn(listen(handle, forward, reporter))
             }
@@ -254,14 +278,26 @@ impl<H: client::Handler + 'static> Tunnels<H> {
                             } else {
                                 forward.bind_port.into()
                             };
-                            remote.lock().unwrap().insert(
-                                port,
-                                RemoteTarget {
-                                    host: forward.dest_host.clone(),
-                                    port: forward.dest_port,
-                                    reporter: reporter.clone(),
-                                },
-                            );
+                            let cancelled = {
+                                let mut targets = remote.lock().unwrap();
+                                if *reporter.stopped.borrow() {
+                                    true
+                                } else {
+                                    targets.insert(
+                                        port,
+                                        RemoteTarget {
+                                            host: forward.dest_host.clone(),
+                                            port: forward.dest_port,
+                                            reporter: reporter.clone(),
+                                        },
+                                    );
+                                    false
+                                }
+                            };
+                            if cancelled {
+                                let _ = handle.cancel_tcpip_forward(forward.bind_host, port).await;
+                                return;
+                            }
                             reporter
                                 .listening(format!("{}:{port} on the server", forward.bind_host));
                         }
@@ -273,13 +309,20 @@ impl<H: client::Handler + 'static> Tunnels<H> {
                 })
             }
         };
-        self.tasks.insert(id, task);
+        self.tasks.insert(id, (kind, task));
     }
 
     /// Stops a tunnel and forgets it. Connections already open are closed too.
     pub fn stop(&mut self, id: Uuid) {
-        if let Some(task) = self.tasks.remove(&id) {
-            task.abort();
+        if let Some(stopped) = self.cancellations.remove(&id) {
+            stopped.send_replace(true);
+        }
+        if let Some((kind, task)) = self.tasks.remove(&id) {
+            // Remote setup must receive the server reply so it can cancel a
+            // forward accepted after Stop, instead of leaving a listener behind.
+            if kind != ForwardKind::Remote {
+                task.abort();
+            }
         }
         let removed = {
             let mut tunnels = self.board.tunnels.lock().unwrap();
@@ -294,7 +337,7 @@ impl<H: client::Handler + 'static> Tunnels<H> {
         };
         let Some(gone) = removed else { return };
         for t in gone {
-            if t.forward.kind == ForwardKind::Remote && t.state == TunnelState::Listening {
+            if t.forward.kind == ForwardKind::Remote {
                 let port = {
                     let mut remote = self.remote.lock().unwrap();
                     let port = remote
@@ -321,8 +364,13 @@ impl<H: client::Handler + 'static> Tunnels<H> {
 
     /// Stops every tunnel, for a closing connection.
     pub fn stop_all(&mut self) {
-        for (_, task) in self.tasks.drain() {
-            task.abort();
+        for (_, stopped) in self.cancellations.drain() {
+            stopped.send_replace(true);
+        }
+        for (_, (kind, task)) in self.tasks.drain() {
+            if kind != ForwardKind::Remote {
+                task.abort();
+            }
         }
         self.remote.lock().unwrap().clear();
         self.board.tunnels.lock().unwrap().clear();
@@ -526,6 +574,60 @@ mod tests {
             dest_port: 5432,
             auto_start: true,
         }
+    }
+
+    #[tokio::test]
+    async fn stopping_remote_connections_closes_both_streams() {
+        let board = Board {
+            tunnels: Arc::default(),
+            emit: Arc::new(|_| {}),
+        };
+        let reporter = board.reporter(Uuid::new_v4());
+        let stopped = reporter.stopped.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = RemoteTarget {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            reporter,
+        };
+        let (channel, mut peer) = tokio::io::duplex(128);
+        let task = tokio::spawn(serve_remote(target, channel));
+        let (mut destination, _) = listener.accept().await.unwrap();
+        peer.write_all(b"x").await.unwrap();
+        let mut byte = [0u8; 1];
+        destination.read_exact(&mut byte).await.unwrap();
+        assert_eq!(byte, [b'x']);
+        stopped.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("remote connection survived Stop")
+            .unwrap();
+        assert_eq!(peer.read(&mut byte).await.unwrap(), 0);
+        assert_eq!(destination.read(&mut byte).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn late_remote_connections_do_not_reopen_a_stopped_tunnel() {
+        let board = Board {
+            tunnels: Arc::default(),
+            emit: Arc::new(|_| {}),
+        };
+        let reporter = board.reporter(Uuid::new_v4());
+        reporter.stopped.send_replace(true);
+        let (channel, mut peer) = tokio::io::duplex(128);
+        serve_remote(
+            RemoteTarget {
+                host: "127.0.0.1".into(),
+                port: 1,
+                reporter,
+            },
+            channel,
+        )
+        .await;
+        assert_eq!(
+            peer.read_u8().await.unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
     }
 
     #[test]

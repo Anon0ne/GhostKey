@@ -1465,9 +1465,11 @@ mod live {
         // Remote: the server listens and connections come back to a listener here.
         let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let echo_port = echo.local_addr().unwrap().port();
-        tokio::spawn(async move {
+        let echo_task = tokio::spawn(async move {
             let (mut c, _) = echo.accept().await.unwrap();
             c.write_all(b"hello from here").await.unwrap();
+            let mut byte = [0u8; 1];
+            tokio::io::AsyncReadExt::read(&mut c, &mut byte).await.unwrap()
         });
         let remote = fwd(ForwardKind::Remote, free_port(), echo_port);
         ssh.start_forward(id, remote.clone());
@@ -1476,7 +1478,19 @@ mod live {
             .await
             .unwrap();
         assert_eq!(read_some(&mut s).await, "hello from here");
-        drop(s);
+        ssh.stop_forward(id, remote.id);
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::io::AsyncReadExt::read(&mut s, &mut byte),
+            )
+            .await
+            .expect("accepted remote connection survived Stop")
+            .unwrap(),
+            0
+        );
+        assert_eq!(echo_task.await.unwrap(), 0);
 
         // Stopping closes the listener.
         ssh.stop_forward(id, local.id);
