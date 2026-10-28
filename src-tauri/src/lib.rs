@@ -1,3 +1,4 @@
+mod forward;
 mod hostkeys;
 mod import;
 mod links;
@@ -253,6 +254,16 @@ async fn sftp_transfer(
 }
 
 #[tauri::command]
+fn start_forward(ssh: State<'_, Arc<Ssh>>, id: u32, forward: forward::Forward) {
+    ssh.start_forward(id, forward);
+}
+
+#[tauri::command]
+fn stop_forward(ssh: State<'_, Arc<Ssh>>, id: u32, forward: Uuid) {
+    ssh.stop_forward(id, forward);
+}
+
+#[tauri::command]
 fn sftp_cancel(transfers: State<'_, Arc<Transfers>>, transfer: u32) {
     transfers.cancel(transfer);
 }
@@ -339,6 +350,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            start_forward,
+            stop_forward,
             sftp_list,
             sftp_mkdir,
             sftp_rename,

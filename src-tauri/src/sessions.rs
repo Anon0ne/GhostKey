@@ -40,6 +40,12 @@ pub struct SavedSession {
     /// Start a session log every time this session connects.
     #[serde(default)]
     pub auto_log: bool,
+    /// Port forwards saved with the session.
+    #[serde(default)]
+    pub forwards: Vec<crate::forward::Forward>,
+    /// Another saved session to connect through first, like ProxyJump.
+    #[serde(default)]
+    pub jump_session: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,6 +162,8 @@ mod tests {
             key_path: None,
             auto_open_tailscale: false,
             auto_log: false,
+            forwards: Vec::new(),
+            jump_session: None,
         }
     }
 

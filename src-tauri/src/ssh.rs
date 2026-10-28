@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::forward::{self, Forward, RemoteTargets, TunnelStatus, Tunnels};
 use crate::hostkeys::{self, HostKeyStatus};
 use crate::links::{self, BannerLink};
 use crate::logging::LineLog;
@@ -44,8 +45,27 @@ pub struct ConnectRequest {
     /// Names the log file, usually the saved session's name.
     #[serde(default)]
     pub label: String,
+    /// Tunnels to start once the shell is open (those set to start automatically).
+    #[serde(default)]
+    pub forwards: Vec<Forward>,
+    /// Reach the server through this host first (one hop, like ProxyJump).
+    #[serde(default)]
+    pub jump: Option<JumpRequest>,
     pub cols: u32,
     pub rows: u32,
+}
+
+/// The bastion to connect through. It is logged in to like any session,
+/// with its own host-key check and prompts.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JumpRequest {
+    pub session_id: Option<Uuid>,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: AuthMethod,
+    pub key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +88,10 @@ pub enum ConnEvent {
     Logging {
         path: Option<String>,
         error: Option<String>,
+    },
+    /// The connection's tunnels, sent in full whenever one changes.
+    Tunnels {
+        tunnels: Vec<TunnelStatus>,
     },
     Closed {
         error: Option<String>,
@@ -145,6 +169,8 @@ enum ConnCmd {
     StopLog,
     /// Opens an SFTP channel next to the shell.
     OpenSftp(oneshot::Sender<anyhow::Result<SftpSession>>),
+    StartForward(Forward),
+    StopForward(Uuid),
     Close,
 }
 
@@ -220,6 +246,14 @@ impl Ssh {
         });
         conns.insert(id, ConnEntry { cmds: tx, task });
         id
+    }
+
+    pub fn start_forward(&self, id: u32, forward: Forward) {
+        self.send(id, ConnCmd::StartForward(forward));
+    }
+
+    pub fn stop_forward(&self, id: u32, forward: Uuid) {
+        self.send(id, ConnCmd::StopForward(forward));
     }
 
     pub fn input(&self, id: u32, data: Vec<u8>) {
@@ -342,6 +376,31 @@ impl ConnCtx {
         }
     }
 
+    /// The same connection's context, aimed at a jump host.
+    fn hop(&self, jump: &JumpRequest) -> ConnCtx {
+        ConnCtx {
+            req: ConnectRequest {
+                session_id: jump.session_id,
+                host: jump.host.clone(),
+                port: jump.port,
+                username: jump.username.clone(),
+                auth: jump.auth,
+                key_path: jump.key_path.clone(),
+                auto_open_tailscale: self.req.auto_open_tailscale,
+                log: false,
+                label: String::new(),
+                forwards: Vec::new(),
+                jump: None,
+                cols: self.req.cols,
+                rows: self.req.rows,
+            },
+            sinks: self.sinks.clone(),
+            prompts: self.prompts.clone(),
+            known_hosts: self.known_hosts.clone(),
+            log_dir: self.log_dir.clone(),
+        }
+    }
+
     fn log_error(&self, error: String) {
         self.sinks.event(ConnEvent::Logging {
             path: None,
@@ -373,6 +432,8 @@ struct Handler {
     prompts: Prompter,
     /// Why the host key was rejected, for the error message.
     rejection: Arc<Mutex<Option<String>>>,
+    /// Where connections from the server's remote forwards go.
+    remote: RemoteTargets,
 }
 
 impl client::Handler for Handler {
@@ -449,11 +510,36 @@ impl client::Handler for Handler {
         });
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        // Only ports this connection asked the server to forward are accepted.
+        let target = self.remote.lock().unwrap().get(&connected_port).cloned();
+        match target {
+            Some(target) => {
+                reply.accept().await;
+                tokio::spawn(forward::serve_remote(target, channel.into_stream()));
+            }
+            None => {
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await
+            }
+        }
+        Ok(())
+    }
 }
 
-async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow::Result<()> {
-    let req = ctx.req.clone();
-    let config = Arc::new(client::Config {
+fn ssh_config() -> Arc<client::Config> {
+    Arc::new(client::Config {
         // No inactivity timeout: Tailscale check mode can hold the login for
         // as long as the user takes to approve in the browser.
         inactivity_timeout: None,
@@ -461,7 +547,30 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
         keepalive_max: 3,
         nodelay: true,
         ..Default::default()
-    });
+    })
+}
+
+async fn tcp_connect(host: &str, port: u16) -> anyhow::Result<tokio::net::TcpStream> {
+    let stream = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        tokio::net::TcpStream::connect((host, port)),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Timed out connecting to {host}:{port}"))??;
+    stream.set_nodelay(true).ok();
+    Ok(stream)
+}
+
+/// Runs the SSH handshake over `stream`, checks the host key, and logs in.
+async fn login<S>(
+    ctx: &ConnCtx,
+    stream: S,
+    remote: RemoteTargets,
+) -> anyhow::Result<client::Handle<Handler>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let req = &ctx.req;
     let rejection = Arc::new(Mutex::new(None));
     let handler = Handler {
         host: req.host.clone(),
@@ -471,18 +580,9 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
         sinks: ctx.sinks.clone(),
         prompts: ctx.prompts.clone(),
         rejection: rejection.clone(),
+        remote,
     };
-
-    ctx.status(format!("Connecting to {}:{}…", req.host, req.port));
-    let stream = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        tokio::net::TcpStream::connect((req.host.as_str(), req.port)),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("Timed out connecting to {}:{}", req.host, req.port))??;
-    stream.set_nodelay(true).ok();
-
-    let mut handle = match client::connect_stream(config, stream, handler).await {
+    let mut handle = match client::connect_stream(ssh_config(), stream, handler).await {
         Ok(h) => h,
         Err(e) => {
             if let Some(reason) = rejection.lock().unwrap().take() {
@@ -491,11 +591,54 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
             return Err(e);
         }
     };
-
-    ctx.status("Logging in…");
-    if !authenticate(&mut handle, &ctx).await? {
-        anyhow::bail!("Login failed: no more login methods to try");
+    if !authenticate(&mut handle, ctx).await? {
+        anyhow::bail!("Login to {} failed: no more login methods to try", req.host);
     }
+    Ok(handle)
+}
+
+async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow::Result<()> {
+    let req = ctx.req.clone();
+    let remote: RemoteTargets = Arc::default();
+
+    // With a jump host, log in there first and reach the server through it.
+    // Each hop checks its own host key and asks for its own login.
+    let mut jump_handle = None;
+    let handle = if let Some(jump) = req.jump.clone() {
+        let hop = ctx.hop(&jump);
+        ctx.status(format!(
+            "Connecting to jump host {}:{}…",
+            jump.host, jump.port
+        ));
+        let stream = tcp_connect(&jump.host, jump.port).await?;
+        ctx.status(format!("Logging in to jump host {}…", jump.host));
+        let jh = login(&hop, stream, Arc::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("Jump host {}: {e:#}", jump.host))?;
+        ctx.status(format!(
+            "Reaching {}:{} through {}…",
+            req.host, req.port, jump.host
+        ));
+        let channel = jh
+            .channel_open_direct_tcpip(req.host.clone(), req.port.into(), "127.0.0.1", 0)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "The jump host {} couldn't reach {}:{}: {e}",
+                    jump.host,
+                    req.host,
+                    req.port
+                )
+            })?;
+        jump_handle = Some(jh);
+        ctx.status("Logging in…");
+        login(&ctx, channel.into_stream(), remote.clone()).await?
+    } else {
+        ctx.status(format!("Connecting to {}:{}…", req.host, req.port));
+        let stream = tcp_connect(&req.host, req.port).await?;
+        ctx.status("Logging in…");
+        login(&ctx, stream, remote.clone()).await?
+    };
 
     let handle = Arc::new(handle);
     let channel = handle.channel_open_session().await?;
@@ -509,6 +652,15 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     log.set_width(req.cols as usize);
     if req.log {
         ctx.start_log(&mut log);
+    }
+    let sinks = ctx.sinks.clone();
+    let mut tunnels = Tunnels::new(
+        handle.clone(),
+        remote,
+        Arc::new(move |tunnels| sinks.event(ConnEvent::Tunnels { tunnels })),
+    );
+    for f in req.forwards.iter().filter(|f| f.auto_start) {
+        tunnels.start(f.clone());
     }
 
     loop {
@@ -532,6 +684,8 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
                 }
                 Some(ConnCmd::StartLog) => ctx.start_log(&mut log),
                 Some(ConnCmd::StopLog) => stop_log(&ctx, &mut log),
+                Some(ConnCmd::StartForward(f)) => tunnels.start(f),
+                Some(ConnCmd::StopForward(id)) => tunnels.stop(id),
                 Some(ConnCmd::OpenSftp(reply)) => {
                     // Opened in its own task, so the terminal keeps flowing meanwhile.
                     let handle = handle.clone();
@@ -547,7 +701,11 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
         }
     }
     stop_log(&ctx, &mut log);
+    tunnels.stop_all();
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
+    if let Some(jh) = jump_handle {
+        let _ = jh.disconnect(Disconnect::ByApplication, "", "en").await;
+    }
     Ok(())
 }
 
@@ -853,6 +1011,8 @@ mod live {
             auto_open_tailscale: true,
             log: auth == AuthMethod::Password,
             label: "live test".into(),
+            forwards: Vec::new(),
+            jump: None,
             cols: 80,
             rows: 24,
         };
@@ -1141,5 +1301,206 @@ mod live {
         ssh.input(id, b"echo GK_$((40+3))\n".to_vec());
         expect_output(&mut rx, "GK_43").await;
         ssh.close(id);
+    }
+
+    /// Waits until the tunnel `id` reaches `state` and returns its status.
+    async fn tunnel(
+        rx: &mut UnboundedReceiver<Seen>,
+        id: Uuid,
+        state: crate::forward::TunnelState,
+    ) -> TunnelStatus {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let seen = tokio::time::timeout_at(deadline, rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("tunnel never reached {state:?}"));
+            if let Some(Seen::Event(ConnEvent::Tunnels { tunnels })) = seen {
+                if let Some(t) = tunnels
+                    .into_iter()
+                    .find(|t| t.forward.id == id && t.state == state)
+                {
+                    return t;
+                }
+            }
+        }
+    }
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    async fn read_some(s: &mut tokio::net::TcpStream) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 256];
+        let n = tokio::time::timeout(Duration::from_secs(5), s.read(&mut buf))
+            .await
+            .expect("no data through the tunnel")
+            .unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    #[tokio::test]
+    async fn tunnels_and_jump_host() {
+        use crate::forward::{ForwardKind, TunnelState};
+        use tokio::io::AsyncWriteExt;
+        let Some(env) = env() else {
+            eprintln!("GHOSTKEY_TEST_HOST not set; skipping live tunnel tests");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(
+            dir.path().join("known_hosts"),
+            dir.path().join("logs"),
+        ));
+        let fwd = |kind, bind_port, dest_port| Forward {
+            id: Uuid::new_v4(),
+            kind,
+            bind_host: "127.0.0.1".into(),
+            bind_port,
+            dest_host: "127.0.0.1".into(),
+            dest_port,
+            auto_start: true,
+        };
+
+        // Through a jump host (the same server, reached as itself), with a local
+        // forward to the server's own SSH port started on connect.
+        let local = fwd(ForwardKind::Local, free_port(), env.port);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tx2 = tx.clone();
+        let sinks = Sinks {
+            events: Arc::new(move |e| {
+                let _ = tx.send(Seen::Event(e));
+            }),
+            output: Arc::new(move |d| {
+                let _ = tx2.send(Seen::Output(d));
+            }),
+            open_url: Arc::new(|_| Ok(())),
+        };
+        let id = ssh.connect(
+            ConnectRequest {
+                session_id: None,
+                host: env.host.clone(),
+                port: env.port,
+                username: env.user.clone(),
+                auth: AuthMethod::Password,
+                key_path: None,
+                auto_open_tailscale: false,
+                log: false,
+                label: String::new(),
+                forwards: vec![local.clone()],
+                jump: Some(JumpRequest {
+                    session_id: None,
+                    host: env.host.clone(),
+                    port: env.port,
+                    username: env.user.clone(),
+                    auth: AuthMethod::Password,
+                    key_path: None,
+                }),
+                cols: 80,
+                rows: 24,
+            },
+            sinks,
+        );
+        let pw = env.password.clone();
+        let (kinds, _, closed) = drive(&ssh, &mut rx, |p| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            _ => yes(&[&pw]),
+        })
+        .await;
+        assert_eq!(closed, None, "login through the jump host failed");
+        // Two logins: the jump host, then the server.
+        let logins = kinds.iter().filter(|k| *k != "hostKey").count();
+        assert_eq!(logins, 2, "{kinds:?}");
+
+        let t = tunnel(&mut rx, local.id, TunnelState::Listening).await;
+        assert_eq!(
+            t.bound.as_deref(),
+            Some(format!("127.0.0.1:{}", local.bind_port).as_str())
+        );
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local.bind_port))
+            .await
+            .unwrap();
+        assert!(read_some(&mut s).await.starts_with("SSH-2.0-"));
+        drop(s);
+
+        // An occupied port is reported, not fatal.
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let clash = fwd(
+            ForwardKind::Local,
+            busy.local_addr().unwrap().port(),
+            env.port,
+        );
+        ssh.start_forward(id, clash.clone());
+        let t = tunnel(&mut rx, clash.id, TunnelState::Failed).await;
+        assert!(t.error.unwrap().contains("already in use"));
+
+        // Dynamic SOCKS5: CONNECT to the server's SSH port by name.
+        let socks = fwd(ForwardKind::Dynamic, free_port(), 0);
+        ssh.start_forward(id, socks.clone());
+        tunnel(&mut rx, socks.id, TunnelState::Listening).await;
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", socks.bind_port))
+            .await
+            .unwrap();
+        s.write_all(&[5, 1, 0]).await.unwrap();
+        let mut req = vec![5, 1, 0, 3, 9];
+        req.extend_from_slice(b"localhost");
+        req.extend_from_slice(&env.port.to_be_bytes());
+        s.write_all(&req).await.unwrap();
+        let mut reply = [0u8; 12];
+        tokio::io::AsyncReadExt::read_exact(&mut s, &mut reply)
+            .await
+            .unwrap();
+        assert_eq!(&reply[..4], &[5, 0, 5, 0], "{reply:?}");
+        let banner = read_some(&mut s).await;
+        assert!(banner.starts_with("SSH-2.0-"), "{banner:?}");
+        drop(s);
+
+        // Remote: the server listens and connections come back to a listener here.
+        let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_port = echo.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut c, _) = echo.accept().await.unwrap();
+            c.write_all(b"hello from here").await.unwrap();
+        });
+        let remote = fwd(ForwardKind::Remote, free_port(), echo_port);
+        ssh.start_forward(id, remote.clone());
+        tunnel(&mut rx, remote.id, TunnelState::Listening).await;
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", remote.bind_port))
+            .await
+            .unwrap();
+        assert_eq!(read_some(&mut s).await, "hello from here");
+        drop(s);
+
+        // Stopping closes the listener.
+        ssh.stop_forward(id, local.id);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::net::TcpStream::connect(("127.0.0.1", local.bind_port))
+            .await
+            .is_ok()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "listener still open after stop"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Disconnecting closes the rest.
+        ssh.close(id);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::net::TcpStream::connect(("127.0.0.1", socks.bind_port))
+            .await
+            .is_ok()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "SOCKS listener still open after disconnect"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
