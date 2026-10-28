@@ -44,6 +44,11 @@ jobs:
           npm test
           npm run build
 
+      - name: Browser terminal layout regressions
+        run: |
+          npx playwright install --with-deps chromium webkit
+          npm run test:layout
+
       - name: Rust format
         working-directory: src-tauri
         run: cargo fmt --check
