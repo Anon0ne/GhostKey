@@ -17,6 +17,7 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **Import (new):** bring in sessions from `~/.ssh/config` and PuTTY with the ⇩ button. You see everything first, pick what to import, and fix names or users. Sessions you already have are skipped unless you choose to update them. GhostKey only reads those files, never runs commands from them, and tells you what it couldn't bring over (such as ProxyJump or port forwards).
 - **Snippets and button bar (new):** save commands you type often, sorted into groups, and star them to get a button above the terminal. A snippet either types its text in and waits for you to press Enter (the default) or runs it. Running, or sending several lines or control characters, first shows exactly what will be sent and to which server, using the same review as pasting. Ctrl+Shift+S opens the list.
 - **File browser (new):** press **Files** (Ctrl+Shift+E) to browse the server over SFTP beside the terminal, using the same login. Download files to a folder you pick, upload with the ⇧ button or by dropping files on the panel, and create folders, rename, or delete. Each transfer shows its progress and can be cancelled. A file is written under a temporary name and renamed only when it is complete, and GhostKey asks before replacing an existing file. Folders can't be transferred yet. If a server has no SFTP, the panel says so and the terminal is unaffected.
+- **Tunnels and jump hosts (new):** save port forwards with a session: local (`-L`), remote (`-R`), and SOCKS proxies (`-D`). You can type them the OpenSSH way, such as `-L 8080:db:5432`. They start when the session connects, listen on 127.0.0.1 unless you explicitly allow other computers, and stop when it disconnects. **Tunnels** in the toolbar shows each tunnel's address, open connections and errors (such as a port already in use), and lets you stop, retry, or add a temporary one. A session can also connect through another saved session as a jump host, like `ssh -J`. Each server's host key is checked and each asks for its own login.
 - **Session logging (new in 0.2):** save what a session prints to a timestamped text file, with colors removed. Start and stop it from the toolbar, or set a saved session to log automatically. Choose the folder in Settings (⚙).
 
 | Tailscale sign-in | New host key | Session editor |
@@ -26,6 +27,10 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 | Import preview | Snippet preview | File browser |
 | --- | --- | --- |
 | ![Import preview](docs/screenshots/import.png) | ![Snippet preview before running](docs/screenshots/snippets.png) | ![SFTP file panel beside the terminal](docs/screenshots/files.png) |
+
+| Tunnels |
+| --- |
+| ![Live tunnels with one port already in use](docs/screenshots/tunnels.png) |
 
 ## Install the alpha
 
