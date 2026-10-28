@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, FileType, OpenFlags};
 use serde::Serialize;
+use uuid::Uuid;
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const CHUNK: usize = 256 * 1024;
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
-/// Suffix of a file still being written. It is renamed into place only when complete,
+/// Suffix of a uniquely named file still being written. It is committed only when complete,
 /// so an interrupted transfer never leaves a truncated file under the real name.
 const PART: &str = ".ghostkey-part";
 
@@ -196,7 +198,7 @@ fn exists_error(path: &str) -> anyhow::Error {
 
 fn local_part(local: &Path) -> PathBuf {
     let mut name = local.file_name().unwrap_or_default().to_os_string();
-    name.push(PART);
+    name.push(format!(".{}{PART}", Uuid::new_v4()));
     local.with_file_name(name)
 }
 
@@ -217,9 +219,14 @@ pub async fn download(
         anyhow::bail!("{remote} is a folder; folder downloads aren't supported yet");
     }
     let part = local_part(local);
+    // Claim the temporary file before entering cleanup; never remove a file we did not create.
+    let mut out = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)
+        .await?;
     let result = async {
         let file = sftp.open(remote).await?;
-        let mut out = tokio::fs::File::create(&part).await?;
         copy(file, &mut out, meta.size.unwrap_or(0), cancel, progress).await?;
         out.sync_all().await?;
         drop(out);
@@ -233,7 +240,14 @@ pub async fn download(
             // Windows can't rename over an existing file.
             tokio::fs::remove_file(local).await?;
         }
-        tokio::fs::rename(&part, local).await?;
+        if overwrite {
+            tokio::fs::rename(&part, local).await?;
+        } else {
+            // Unlike rename on Unix, hard_link cannot replace a destination that
+            // appeared after the initial existence check.
+            tokio::fs::hard_link(&part, local).await?;
+            tokio::fs::remove_file(&part).await?;
+        }
         anyhow::Ok(())
     }
     .await;
@@ -264,15 +278,15 @@ pub async fn upload(
     if existing.is_some() && !overwrite {
         return Err(exists_error(remote));
     }
-    let part = format!("{remote}{PART}");
+    let part = format!("{remote}.{}{PART}", Uuid::new_v4());
+    let mut file = sftp
+        .open_with_flags(
+            part.clone(),
+            OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+        )
+        .await?;
     let result = async {
         let input = tokio::fs::File::open(local).await?;
-        let mut file = sftp
-            .open_with_flags(
-                part.clone(),
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
-            )
-            .await?;
         copy(input, &mut file, local_meta.len(), cancel, progress).await?;
         file.shutdown().await?;
         drop(file);
@@ -310,7 +324,14 @@ mod tests {
     #[test]
     fn part_files_sit_next_to_the_target() {
         let p = local_part(Path::new("/tmp/x/report.pdf"));
-        assert_eq!(p, Path::new("/tmp/x/report.pdf.ghostkey-part"));
+        assert_eq!(p.parent(), Some(Path::new("/tmp/x")));
+        assert!(p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("report.pdf."));
+        assert!(p.file_name().unwrap().to_string_lossy().ends_with(PART));
+        assert_ne!(p, local_part(Path::new("/tmp/x/report.pdf")));
     }
 
     #[tokio::test]
