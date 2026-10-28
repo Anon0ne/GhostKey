@@ -99,6 +99,8 @@ export function toSessions(rows: Row[], folder: string, newId: () => string, ses
         ...connection,
         autoOpenTailscale: false,
         autoLog: false,
+        forwards: [],
+        jumpSession: null,
       });
     }
   }

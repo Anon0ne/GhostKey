@@ -33,8 +33,8 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | --- | --- | --- | --- | --- | --- |
 | F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
-| F03 | SFTP file browser | In progress | Claude | `sftp` | Implemented; awaiting review. Folder transfers not done |
-| F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
+| F04 | Port forwarding and jump hosts | In progress | Claude | `forwarding` | Implemented; awaiting review. Multi-hop jumps and import of forwards not done |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
@@ -358,7 +358,38 @@ Copy this block into a dated entry below when starting or stopping work:
   no-overwrite downloads also refuse destinations created during the transfer.
   Frontend tests/build pass locally; Rust/live SSH and both platform packages are
   verified by CI before release. Desktop drag/drop smoke testing remains pending.
+- 2026-10-28 — Claude: #10 merged (F03 Done). Started F04 on `forwarding` from 82d8889.
+  First step, per the spec's "bounded tunnel type": local forwards (-L) saved with a
+  session, loopback by default, shown in the toolbar with stop controls. Then jump hosts
+  (one hop, host key checked at each hop), then dynamic SOCKS and remote forwards.
+- 2026-10-28 — Claude: F04 implemented on `forwarding`.
+  - `src-tauri/src/forward.rs`: local, remote and dynamic (SOCKS5, CONNECT, no auth)
+    tunnels, each in its own task with a status (starting, listening, failed, open
+    connections, last error) sent as `ConnEvent::Tunnels`. Bind errors are explained
+    (port in use, permission, address not on this computer). Stopping or disconnecting
+    aborts listeners and open connections; remote forwards are cancelled on the server.
+    Remote-forward channels are accepted only for ports this connection requested.
+  - `ssh.rs`: `login()` is shared by the jump hop and the target; the target's SSH runs
+    over a direct-tcpip channel from the jump host. Each hop has its own host-key check
+    and prompts. Saved sessions gain `forwards` and `jumpSession` (one hop; a session
+    that uses a jump host can't be one).
+  - UI: `src/tunnels.ts` (rules, OpenSSH spec parsing), `src/tunnelUi.ts` (session editor
+    section, live Tunnels dialog). Non-loopback local listeners need an explicit tick.
+    Split panes don't copy the tunnels, since their ports are taken.
+  - Checks (Linux): 49 Rust tests including a live test of all three kinds through a jump
+    host, a busy port, stop, and disconnect cleanup; 47 frontend tests. Real app: jump
+    login, local tunnel and a SOCKS tunnel carried SSH banners, busy port shown as
+    failed with Retry, stop and disconnect closed the listeners.
+  - Not done: multi-hop jumps, importing ProxyJump and *Forward from ~/.ssh/config.
 - 2026-10-28 — Claude: per-pane × button (shown when a tab is split; disconnects and closes
   the pane after a confirm if connected), on `pane-close`.
   - UI rule from Justin: right-click in the terminal stays copy/paste. Any future menus go
     in a top menu bar like a normal desktop program, not in a right-click menu.
+
+- 2026-10-27 — Anon0ne, release integration: merged #12's split-pane close controls
+  and retained both handoff blocks while updating #13 from main. Review found that
+  accepted remote-forward connections outlived Stop. A per-tunnel cancellation
+  signal now closes those streams, rejects late arrivals, and cancels listeners
+  accepted after Stop during remote setup. Added stream-level and live SSH
+  regressions plus a pane-close callback test. Preparing v0.2.2; frontend tests
+  and build pass locally; Rust/live SSH and both installer builds must pass CI.
