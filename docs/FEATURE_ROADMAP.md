@@ -381,3 +381,7 @@ Copy this block into a dated entry below when starting or stopping work:
     login, local tunnel and a SOCKS tunnel carried SSH banners, busy port shown as
     failed with Retry, stop and disconnect closed the listeners.
   - Not done: multi-hop jumps, importing ProxyJump and *Forward from ~/.ssh/config.
+- 2026-10-28 — Claude: per-pane × button (shown when a tab is split; disconnects and closes
+  the pane after a confirm if connected), on `pane-close`.
+  - UI rule from Justin: right-click in the terminal stays copy/paste. Any future menus go
+    in a top menu bar like a normal desktop program, not in a right-click menu.
