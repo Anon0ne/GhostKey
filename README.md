@@ -16,15 +16,16 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **Tabs and split panes (new in 0.2):** open as many sessions as you like in tabs, and split any tab side by side or top and bottom. Each pane has its own connection and Reconnect button. Splitting a connected pane opens a second shell on the same server.
 - **Import (new):** bring in sessions from `~/.ssh/config` and PuTTY with the ⇩ button. You see everything first, pick what to import, and fix names or users. Sessions you already have are skipped unless you choose to update them. GhostKey only reads those files, never runs commands from them, and tells you what it couldn't bring over (such as ProxyJump or port forwards).
 - **Snippets and button bar (new):** save commands you type often, sorted into groups, and star them to get a button above the terminal. A snippet either types its text in and waits for you to press Enter (the default) or runs it. Running, or sending several lines or control characters, first shows exactly what will be sent and to which server, using the same review as pasting. Ctrl+Shift+S opens the list.
+- **File browser (new):** press **Files** (Ctrl+Shift+E) to browse the server over SFTP beside the terminal, using the same login. Download files to a folder you pick, upload with the ⇧ button or by dropping files on the panel, and create folders, rename, or delete. Each transfer shows its progress and can be cancelled. A file is written under a temporary name and renamed only when it is complete, and GhostKey asks before replacing an existing file. Folders can't be transferred yet. If a server has no SFTP, the panel says so and the terminal is unaffected.
 - **Session logging (new in 0.2):** save what a session prints to a timestamped text file, with colors removed. Start and stop it from the toolbar, or set a saved session to log automatically. Choose the folder in Settings (⚙).
 
 | Tailscale sign-in | New host key | Session editor |
 | --- | --- | --- |
 | ![Tailscale approval](docs/screenshots/tailscale.png) | ![Host key prompt](docs/screenshots/hostkey.png) | ![Session editor](docs/screenshots/editor.png) |
 
-| Import preview | Snippet preview |
-| --- | --- |
-| ![Import preview](docs/screenshots/import.png) | ![Snippet preview before running](docs/screenshots/snippets.png) |
+| Import preview | Snippet preview | File browser |
+| --- | --- | --- |
+| ![Import preview](docs/screenshots/import.png) | ![Snippet preview before running](docs/screenshots/snippets.png) | ![SFTP file panel beside the terminal](docs/screenshots/files.png) |
 
 ## Install the alpha
 
@@ -48,6 +49,8 @@ Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the 
 | Alt+1 … Alt+9, Ctrl+PgUp / Ctrl+PgDn | Switch tabs |
 | Ctrl+Shift+L | Start or stop logging |
 | Ctrl+Shift+S | Snippets |
+| Ctrl+Shift+E | Show or hide the file browser |
+| Ctrl+Shift+F | Find in the terminal |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
 | Right-click | Copy the selection, or paste when nothing is selected |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Bigger / smaller / default font size |

@@ -33,7 +33,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | --- | --- | --- | --- | --- | --- |
 | F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
-| F03 | SFTP file browser | In progress | Claude | `sftp` | Started 2026-10-27 |
+| F03 | SFTP file browser | In progress | Claude | `sftp` | Implemented; awaiting review. Folder transfers not done |
 | F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
@@ -334,3 +334,19 @@ Copy this block into a dated entry below when starting or stopping work:
 - 2026-10-27 — Claude: #9 merged (F08 Done). Started F03 (SFTP browser) on `sftp` from
   d1e7d9f. Plans to own `src-tauri/src/sftp.rs` (new), `src/sftp.ts` (new) and a file
   panel beside the terminal; it reuses the session's SSH connection, so no second login.
+- 2026-10-28 — Claude: F03 implemented on `sftp`.
+  - `src-tauri/src/sftp.rs`: listing, transfers (256 KiB chunks, progress every 100 ms,
+    cancel between chunks), `.ghostkey-part` temp names renamed into place, explicit
+    `overwrite` flag, permissions kept on replace (and copied to local files on Unix).
+  - `ssh.rs`: the connection task keeps the russh handle in an `Arc` and opens an SFTP
+    channel on request (`ConnCmd::OpenSftp`); `Ssh::sftp(id)` caches one session per
+    connection. A server without the subsystem is detected from its reply, not a timeout.
+  - UI: `src/filePanel.ts` (panel per pane, Ctrl+Shift+E), pure rules in `src/files.ts`.
+    Drops from the desktop use Tauri's drag-drop event, routed to the panel under the pointer.
+  - `scripts/test-sshd.sh` now enables `Subsystem sftp internal-sftp` for the live tests.
+  - Checks (Linux): 43 Rust tests including a live round trip (3 MB binary, overwrite,
+    permissions, cancel); 42 frontend tests. Real app: downloaded a 5 MB file
+    byte-identical, uploaded, renamed, deleted, saw the replace prompt, and saw the
+    no-SFTP message while the shell kept working. Drag and drop is not testable under
+    Xvfb and needs a check on Windows and Linux desktops.
+  - Not done: folder transfers, chmod, transfers that resume.

@@ -552,14 +552,24 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
 }
 
 async fn open_sftp(handle: &client::Handle<Handler>) -> anyhow::Result<SftpSession> {
-    let channel = handle.channel_open_session().await?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|_| anyhow::anyhow!("This server doesn't offer SFTP"))?;
+    const NO_SFTP: &str =
+        "This server doesn't offer SFTP, so files can't be browsed here. The terminal still works.";
+    let mut channel = handle.channel_open_session().await?;
+    channel.request_subsystem(true, "sftp").await?;
+    // Wait for the server's answer, so a refusal shows at once instead of as a timeout.
+    loop {
+        match tokio::time::timeout(CONNECT_TIMEOUT, channel.wait()).await {
+            Ok(Some(ChannelMsg::Success)) => break,
+            Ok(Some(ChannelMsg::Failure)) | Ok(Some(ChannelMsg::Close)) | Ok(None) => {
+                anyhow::bail!(NO_SFTP)
+            }
+            Ok(Some(_)) => continue,
+            Err(_) => anyhow::bail!("The server didn't answer the SFTP request"),
+        }
+    }
     SftpSession::new(channel.into_stream())
         .await
-        .map_err(|e| anyhow::anyhow!("This server doesn't offer SFTP ({e})"))
+        .map_err(|e| anyhow::anyhow!("SFTP didn't start: {e}"))
 }
 
 /// Tries "none" first (Tailscale SSH logs in this way, after any check-mode

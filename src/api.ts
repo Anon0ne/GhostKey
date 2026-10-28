@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Scan } from "./importPlan";
 import type { Snippet } from "./snippets";
+import type { Listing, TransferEvent } from "./files";
 
 export type AuthMethod = "password" | "key";
 
@@ -96,4 +97,22 @@ export const api = {
   deleteSnippet: (id: string) => invoke<void>("delete_snippet", { id }),
   scanImports: () => invoke<Scan>("scan_imports"),
   scanSshConfig: (path: string) => invoke<Scan>("scan_ssh_config", { path }),
+  sftpList: (id: number, path: string) => invoke<Listing>("sftp_list", { id, path }),
+  sftpMkdir: (id: number, path: string) => invoke<void>("sftp_mkdir", { id, path }),
+  sftpRename: (id: number, from: string, to: string) => invoke<void>("sftp_rename", { id, from, to }),
+  sftpRemove: (id: number, path: string, dir: boolean) => invoke<void>("sftp_remove", { id, path, dir }),
+  sftpExists: (id: number, path: string) => invoke<boolean>("sftp_exists", { id, path }),
+  /** Starts a transfer and returns its id; progress and the result arrive on `onEvent`. */
+  sftpTransfer: (
+    id: number,
+    t: { upload: boolean; local: string; remote: string; overwrite: boolean },
+    onEvent: (e: TransferEvent) => void,
+  ) => {
+    const events = new Channel<TransferEvent>();
+    events.onmessage = onEvent;
+    return invoke<number>("sftp_transfer", { id, ...t, events });
+  },
+  sftpCancel: (transfer: number) => invoke<void>("sftp_cancel", { transfer }),
+  localKind: (path: string) => invoke<"file" | "dir" | "missing">("local_kind", { path }),
+  defaultDownloadDir: () => invoke<string | null>("default_download_dir"),
 };
