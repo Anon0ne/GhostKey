@@ -33,8 +33,8 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | --- | --- | --- | --- | --- | --- |
 | F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
-| F03 | SFTP file browser | In progress | Claude | `sftp` | Implemented; awaiting review. Folder transfers not done |
-| F04 | Port forwarding and jump hosts | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
+| F04 | Port forwarding and jump hosts | In progress | Claude | `forwarding` | Started 2026-10-28 |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
@@ -350,3 +350,7 @@ Copy this block into a dated entry below when starting or stopping work:
     no-SFTP message while the shell kept working. Drag and drop is not testable under
     Xvfb and needs a check on Windows and Linux desktops.
   - Not done: folder transfers, chmod, transfers that resume.
+- 2026-10-28 — Claude: #10 merged (F03 Done). Started F04 on `forwarding` from 82d8889.
+  First step, per the spec's "bounded tunnel type": local forwards (-L) saved with a
+  session, loopback by default, shown in the toolbar with stop controls. Then jump hosts
+  (one hop, host key checked at each hop), then dynamic SOCKS and remote forwards.
