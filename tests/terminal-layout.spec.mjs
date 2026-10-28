@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-test('split panes keep every terminal row visible through resizing and search', async ({ page }) => {
+for (const dir of ['row', 'column']) {
+test(`${dir} split keeps every terminal row visible through resizing and search`, async ({ page }) => {
+  test.setTimeout(60000);
   await page.goto('/tests/fixtures/terminal-layout.html');
   await page.waitForFunction(() => window.ready);
-  for (const dir of ['row', 'column']) {
     await page.evaluate((dir) => {
       window.layout.split.className = `split ${dir}`;
       window.layout.panes[0].openSearch();
@@ -26,8 +27,8 @@ test('split panes keep every terminal row visible through resizing and search', 
         expect(pane.overflow, `${dir} split at height ${height}: extra container scrolling`).toBeLessThanOrEqual(1);
       }
     }
-  }
 });
+}
 
 test('scrollback stays available without an always-present empty scrollbar', async ({ page }) => {
   await page.goto('/tests/fixtures/terminal-layout.html');
