@@ -91,6 +91,6 @@ export function parseSpec(text: string): Forward | null {
     } else if (parts.length !== 3) return null;
     [f.bindPort, f.destHost, f.destPort] = [num(rest[0]), rest[1], num(rest[2])];
   }
-  if (f.bindHost === "*" ) f.bindHost = "0.0.0.0";
+  if (f.bindHost === "*") f.bindHost = "0.0.0.0";
   return forwardProblem(f) ? null : f;
 }
