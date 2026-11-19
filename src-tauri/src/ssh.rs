@@ -434,6 +434,8 @@ struct Handler {
     rejection: Arc<Mutex<Option<String>>>,
     /// Where connections from the server's remote forwards go.
     remote: RemoteTargets,
+    /// Banners and links already shown, so repeats don't reopen the browser.
+    banners: links::BannerSeen,
 }
 
 impl client::Handler for Handler {
@@ -493,14 +495,26 @@ impl client::Handler for Handler {
         banner: &str,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        if !self.banners.is_new(banner) {
+            return Ok(());
+        }
         let found = links::find_links(banner);
         let mut auto_opened = None;
         if self.auto_open_tailscale {
-            if let Some(link) = found.iter().find(|l| l.tailscale) {
+            if let Some(link) = self.banners.to_open(&found) {
                 match (self.sinks.open_url)(&link.url) {
                     Ok(()) => auto_opened = Some(link.url.clone()),
                     Err(e) => log::warn!("could not open browser: {e}"),
                 }
+            }
+            if let Some(url) = &auto_opened {
+                self.banners.mark_opened(url);
+            } else {
+                // Opened by an earlier banner: still label it "Open again".
+                auto_opened = found
+                    .iter()
+                    .find(|l| l.tailscale && self.banners.was_opened(&l.url))
+                    .map(|l| l.url.clone());
             }
         }
         self.sinks.event(ConnEvent::Banner {
@@ -581,6 +595,7 @@ where
         prompts: ctx.prompts.clone(),
         rejection: rejection.clone(),
         remote,
+        banners: links::BannerSeen::default(),
     };
     let mut handle = match client::connect_stream(ssh_config(), stream, handler).await {
         Ok(h) => h,

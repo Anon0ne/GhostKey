@@ -1,6 +1,7 @@
 //! Finds sign-in links in server banners, such as the one Tailscale SSH sends
 //! in check mode.
 
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -34,6 +35,41 @@ pub fn find_links(text: &str) -> Vec<BannerLink> {
         });
     }
     links
+}
+
+/// Remembers what one connection's banners have already shown and opened.
+/// Tailscale SSH can send the same check-mode banner more than once while it
+/// waits for approval, and the browser should open only once.
+#[derive(Default)]
+pub struct BannerSeen {
+    last: Option<String>,
+    opened: HashSet<String>,
+}
+
+impl BannerSeen {
+    /// Returns false when `banner` repeats the previous one, so it isn't shown again.
+    pub fn is_new(&mut self, banner: &str) -> bool {
+        if self.last.as_deref() == Some(banner) {
+            return false;
+        }
+        self.last = Some(banner.to_string());
+        true
+    }
+
+    /// The Tailscale link to open automatically, if one hasn't been opened yet.
+    pub fn to_open<'a>(&self, links: &'a [BannerLink]) -> Option<&'a BannerLink> {
+        links
+            .iter()
+            .find(|l| l.tailscale && !self.opened.contains(&l.url))
+    }
+
+    pub fn mark_opened(&mut self, url: &str) {
+        self.opened.insert(url.to_string());
+    }
+
+    pub fn was_opened(&self, url: &str) -> bool {
+        self.opened.contains(url)
+    }
 }
 
 /// True for https links on tailscale.com or one of its subdomains.
@@ -90,6 +126,29 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].url, "https://example.com/x");
         assert!(!links[0].tailscale);
+    }
+
+    #[test]
+    fn repeated_banner_opens_once() {
+        let banner = "# To authenticate, visit: https://login.tailscale.com/a/abc\n";
+        let mut seen = BannerSeen::default();
+        assert!(seen.is_new(banner));
+        let links = find_links(banner);
+        let link = seen.to_open(&links).unwrap().url.clone();
+        seen.mark_opened(&link);
+        // The same banner again is dropped.
+        assert!(!seen.is_new(banner));
+        // A different banner with the same link doesn't reopen it.
+        let other = "# Still waiting. Visit https://login.tailscale.com/a/abc\n";
+        assert!(seen.is_new(other));
+        assert!(seen.to_open(&find_links(other)).is_none());
+        assert!(seen.was_opened(&link));
+        // A new link does open.
+        let fresh = find_links("https://login.tailscale.com/a/def");
+        assert_eq!(
+            seen.to_open(&fresh).unwrap().url,
+            "https://login.tailscale.com/a/def"
+        );
     }
 
     #[test]

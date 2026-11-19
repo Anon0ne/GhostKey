@@ -411,3 +411,6 @@ Copy this block into a dated entry below when starting or stopping work:
   and right-click clipboard paste, plus focus guards for reconnect/dispose and
   pane/dialog changes. Both new browser checks and 54 frontend tests pass
   locally in Chromium; CI verifies WebKit and platform builds for v0.2.4.
+- 2026-11-19 — Claude: Tailscale sign-in links opened twice in the browser. Each connection
+  now remembers which links it opened and skips a banner identical to the last one, so a
+  repeated check-mode banner shows once and opens the browser once. Branch `tailscale-open-once`.
