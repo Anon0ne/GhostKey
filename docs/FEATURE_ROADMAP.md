@@ -414,3 +414,6 @@ Copy this block into a dated entry below when starting or stopping work:
 - 2026-10-28 — Claude: #12 (pane ×) and #13 (F04, with Anon0ne's remote-tunnel stop fix and
   0.2.2 bump) merged. F04 marked Done. Claude is pausing new features at Justin's request;
   F05/F06 are not started.
+- 2026-11-19 — Claude: Tailscale sign-in links opened twice in the browser. Each connection
+  now remembers which links it opened and skips a banner identical to the last one, so a
+  repeated check-mode banner shows once and opens the browser once. Merged as #17.
