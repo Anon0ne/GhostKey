@@ -458,10 +458,12 @@ input.invalid {
   background: var(--red);
 }
 
-.terminal {
+.terminal-container {
   flex: 1;
   min-height: 0;
-  padding: 5px; /* QTerminal's TerminalMargin=5 */
+  /* Keep spacing outside the box measured by xterm's fit addon. */
+  margin: 5px;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -940,7 +942,7 @@ textarea.snippet-input:focus {
   min-width: 0;
 }
 
-.pane-body .terminal {
+.pane-body .terminal-container {
   min-width: 0;
 }
 
@@ -1216,4 +1218,9 @@ textarea.snippet-input:focus {
   flex-direction: column;
   gap: 4px;
   margin-bottom: 6px;
+}
+
+/* Keep history scrolling, without reserving an empty scrollbar at the prompt. */
+.terminal-container .xterm-viewport {
+  overflow-y: auto;
 }

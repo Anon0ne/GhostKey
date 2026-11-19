@@ -22,6 +22,8 @@ export interface PaneHost {
   shortcut(pane: Pane, e: KeyboardEvent): boolean;
   /** Disconnects and closes the pane, asking first if it's connected. */
   close(pane: Pane): void;
+  /** Whether restoring input focus would stay in the selected pane, outside dialogs. */
+  canFocus?(pane: Pane): boolean;
 }
 
 // One login dialog at a time, so two panes asking at once can't mix up answers.
@@ -85,7 +87,7 @@ export class Pane {
     previous.addEventListener("click", () => this.find(true));
     next.addEventListener("click", () => this.find(false));
     closeSearch.addEventListener("click", () => this.closeSearch());
-    this.termEl = el("div", { class: "terminal" });
+    this.termEl = el("div", { class: "terminal-container" });
     this.body = el("div", { class: "pane-body" }, this.termEl);
     // Shown only when the tab is split; a single pane closes with its tab.
     const closePane = el("button", { class: "pane-close", type: "button", text: "×", title: "Close this pane (Ctrl+Shift+W)", "aria-label": "Close this pane" });
@@ -250,6 +252,11 @@ export class Pane {
       }
     } finally {
       this.pastePending = false;
+      // Closing a paste dialog removes the focused button. Give Enter back to
+      // this terminal, without stealing focus after a pane switch or reconnect.
+      if (!this.disposed && this.conn.online && this.conn.id === id && this.conn.request === request && this.host.canFocus?.(this) !== false) {
+        this.focus();
+      }
     }
   }
 
