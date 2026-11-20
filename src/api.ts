@@ -9,6 +9,7 @@ import type { Workspace } from "./workspace";
 import type { TmuxList } from "./tmux";
 import type { Bookmark } from "./bookmarks";
 import type { Protocol, SerialSettings } from "./protocols";
+import type { UpdateCheck, UpdateProgress } from "./update";
 
 export type AuthMethod = "password" | "key" | "agent";
 
@@ -174,6 +175,13 @@ export const api = {
   saveBookmark: (bookmark: Bookmark) => invoke<void>("save_bookmark", { bookmark }),
   deleteBookmark: (id: string) => invoke<void>("delete_bookmark", { id }),
   serialPorts: () => invoke<string[]>("serial_ports"),
+  checkUpdate: (includePre: boolean) => invoke<UpdateCheck>("check_update", { includePre }),
+  /** Downloads, checks and installs a signed update, then restarts the app. */
+  installUpdate: (manifest: string, onProgress: (p: UpdateProgress) => void) => {
+    const events = new Channel<UpdateProgress>();
+    events.onmessage = onProgress;
+    return invoke<void>("install_update", { manifest, events });
+  },
   listTmux: (id: number) => invoke<TmuxList>("list_tmux", { id }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, text: string) => invoke<void>("write_text_file", { path, text }),

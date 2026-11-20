@@ -31,6 +31,7 @@ import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } fro
 import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
 import { THEME_IDS, THEMES, themeById } from "./theme";
+import { progressText, releasedText, shouldNotify, skippedVersion, skipVersion, type UpdateCheck } from "./update";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -879,6 +880,8 @@ async function openSettings() {
   const user = el("input", { value: prefs.defaultUser, placeholder: "e.g. kali", spellcheck: "false" });
   const port = el("input", { type: "number", min: "1", max: "65535", value: String(prefs.defaultPort) });
   const [reconnectRow, reconnect] = checkbox("Reconnect on its own when a connection drops", prefs.autoReconnect);
+  const [updatesRow, updates] = checkbox("Check for updates when GhostKey starts", prefs.checkUpdates);
+  const [preRow, preUpdates] = checkbox("Include alpha and beta releases", prefs.preReleaseUpdates);
   const localShell = el("input", { value: prefs.localShell, placeholder: navigator.userAgent.includes("Windows") ? "powershell.exe (default)" : "Your login shell (default)", spellcheck: "false" });
 
   const read = (): Prefs =>
@@ -898,6 +901,8 @@ async function openSettings() {
         defaultPort: Number(port.value),
         autoReconnect: reconnect.checked,
         localShell: localShell.value,
+        checkUpdates: updates.checked,
+        preReleaseUpdates: preUpdates.checked,
       },
       THEME_IDS,
     );
@@ -933,6 +938,7 @@ async function openSettings() {
         section("Appearance", field("Theme", theme), field("Font", font, "Fonts other than Fira Code are used when installed."), field("Font size", size, "Ctrl+= and Ctrl+- also change it.")),
         section("Terminal", field("Cursor", cursor), blinkRow, field("Scrollback lines", scrollback, "Lines kept per terminal for scrolling and Find."), copyRow, field("Local shell", localShell, "The program File → New local terminal runs, e.g. pwsh, cmd.exe, wsl.exe or /bin/zsh, without arguments. Leave empty for the default.")),
         section("Window", sidebarRow, barRow),
+        section("Updates", updatesRow, preRow, el("small", { class: "hint", text: "GhostKey asks GitHub for the list of releases. Nothing about you or your sessions is sent. Help → Check for updates works either way." })),
         section(
           "Connections",
           field("Default user", user, "Quick connect uses it when the address has no user@."),
@@ -1883,6 +1889,83 @@ async function showShortcuts() {
   }).result;
 }
 
+// ---------------------------------------------------------------- updates
+
+let lastUpdate: UpdateCheck | null = null;
+
+function renderUpdateBadge() {
+  const badge = $<HTMLButtonElement>("update-badge");
+  const r = lastUpdate?.available;
+  badge.hidden = !r || r.version === skippedVersion(storage());
+  badge.textContent = r ? `Update: ${r.version}` : "";
+  badge.title = r ? `${r.name} is available. Click for details.` : "";
+}
+
+/** Asks GitHub for a newer release. From the menu it always answers; at startup it only shows a badge. */
+async function checkForUpdates(manual: boolean) {
+  let check: UpdateCheck;
+  try {
+    check = await api.checkUpdate(prefs.preReleaseUpdates);
+  } catch (e) {
+    if (manual) await confirm("Couldn't check for updates", String(e), "OK");
+    return;
+  }
+  lastUpdate = check;
+  renderUpdateBadge();
+  if (!manual) return;
+  if (!shouldNotify(check, skippedVersion(storage()), manual)) {
+    await confirm("You're up to date", `GhostKey ${check.current} is the newest ${prefs.preReleaseUpdates ? "release, including alpha and beta builds" : "stable release"}.`, "OK");
+    return;
+  }
+  await showUpdate(check);
+}
+
+async function showUpdate(check: UpdateCheck) {
+  const r = check.available;
+  if (!r) return;
+  const status = el("p", { class: "hint" });
+  const choice = await showModal<"later" | "skip" | "page" | "install">({
+    title: "Update available",
+    body: [
+      el("p", { text: `${r.name} is available. You have ${check.current}.` }),
+      el("small", { class: "hint", text: [releasedText(r.published), r.prerelease ? "Pre-release (alpha or beta)" : ""].filter(Boolean).join(" · ") }),
+      r.notes ? el("pre", { class: "update-notes", text: r.notes }) : el("span"),
+      check.canInstall
+        ? el("p", { class: "hint", text: "GhostKey checks the download's signature before installing, then restarts. Open sessions will close." })
+        : el("p", { class: "hint", text: check.installNote ?? "" }),
+      status,
+    ],
+    buttons: [
+      { label: "Skip this version", value: () => "skip" },
+      { label: "Later", value: () => "later" },
+      { label: "Open release page", value: () => "page", primary: !check.canInstall },
+      ...(check.canInstall ? [{ label: "Install and restart", value: () => "install" as const, primary: true }] : []),
+    ],
+    onDismiss: () => "later",
+  }).result;
+  if (choice === "skip") {
+    skipVersion(storage(), r.version);
+    renderUpdateBadge();
+  } else if (choice === "page") {
+    await api.openLink(r.url).catch((e) => confirm("Couldn't open the page", String(e), "OK"));
+  } else if (choice === "install" && r.manifest) {
+    await installUpdate(r.manifest);
+  }
+}
+
+async function installUpdate(manifest: string) {
+  const live = tabs.flatMap((t) => panes(t.root)).filter((p) => p.conn.active);
+  if (live.length && !(await confirm("Install the update?", `GhostKey will restart, closing ${live.length === 1 ? "an open session" : `${live.length} open sessions`}. Disconnect and install?`, "Install", true))) return;
+  const text = el("p", { text: "Starting the download…" });
+  const progress = showModal<null>({ title: "Updating GhostKey", body: [text], buttons: [], onDismiss: () => null });
+  try {
+    await api.installUpdate(manifest, (p) => (text.textContent = progressText(p)));
+  } catch (e) {
+    progress.close();
+    await confirm("The update didn't install", `${String(e)}\n\nNothing was changed. You can download the new version from the release page instead.`, "OK");
+  }
+}
+
 async function showAbout() {
   const version = await getVersion().catch(() => "");
   const link = el("button", { class: "link-btn", type: "button", text: REPO_URL });
@@ -1976,6 +2059,7 @@ const menus: Menu[] = [
     items: [
       { label: "Keyboard shortcuts", run: () => void showShortcuts() },
       { label: "GhostKey on GitHub", run: () => void api.openLink(REPO_URL).catch(() => {}) },
+      { label: "Check for updates…", run: () => void checkForUpdates(true) },
       { label: "About GhostKey", run: () => void showAbout() },
     ],
   },
@@ -2148,6 +2232,9 @@ $("new-tab").addEventListener("click", () => newTab());
 $("disconnect").addEventListener("click", () => activePane().conn.disconnect());
 $("reconnect").addEventListener("click", () => activePane().conn.retry());
 $("diagnostics").addEventListener("click", () => void showDiagnostics());
+$("update-badge").addEventListener("click", () => {
+  if (lastUpdate) void showUpdate(lastUpdate);
+});
 $("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
 $("terminal-find").addEventListener("click", () => activePane().openSearch());
 $("files-toggle").addEventListener("click", () => activePane().toggleFiles());
@@ -2167,6 +2254,8 @@ async function start() {
   setPrefs(prefs);
   newTab();
   await Promise.all([refreshSessions(), refreshSnippets()]);
+  // Wait a little so the check never slows starting up.
+  if (prefs.checkUpdates) setTimeout(() => void checkForUpdates(false), 4000);
 }
 
 start();

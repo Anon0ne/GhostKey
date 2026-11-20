@@ -38,10 +38,29 @@ jobs:
 
       - run: npm ci
 
+      # Signed updates (Help > Check for updates) need the key pair made with
+      # `npx tauri signer generate`: its public key in tauri.conf.json and the
+      # private key and password as the secrets below. Without them the release
+      # still builds, and the app offers the download page instead.
+      - name: Check for the update signing key
+        id: signing
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "args=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY isn't set, so this release won't update in place."
+          fi
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: ${{ steps.signing.outputs.args }}
           tagName: ${{ github.ref_name }}
           releaseName: GhostKey ${{ github.ref_name }}
           releaseBody: Alpha build for testing. See SPEC.md for what's included.

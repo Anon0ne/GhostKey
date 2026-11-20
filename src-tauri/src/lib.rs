@@ -12,6 +12,7 @@ mod sftp;
 mod snippets;
 mod ssh;
 mod tmux;
+mod update;
 mod workspaces;
 
 use std::path::PathBuf;
@@ -230,6 +231,91 @@ fn open_link(app: AppHandle, url: String) -> CmdResult<()> {
         return Err("Only https links can be opened".into());
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
+}
+
+/// True when this build carries a public key for checking signed updates.
+fn updater_key_set(app: &AppHandle) -> bool {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|u| u.get("pubkey"))
+        .and_then(|k| k.as_str())
+        .is_some_and(|k| !k.trim().is_empty())
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle, include_pre: bool) -> CmdResult<update::UpdateCheck> {
+    let current = app.package_info().version.clone();
+    let releases = update::fetch_releases().await.map_err(err)?;
+    let available = update::newest(&releases, &current, include_pre);
+    let install_note = match &available {
+        None => None,
+        Some(r) if r.manifest.is_none() => {
+            Some("This release has no signed update attached, so download it from the release page.".to_string())
+        }
+        Some(_) if !updater_key_set(&app) => {
+            Some("This build of GhostKey can't check signed updates, so download the new version from the release page.".to_string())
+        }
+        Some(_) => update::platform_note().map(str::to_string),
+    };
+    Ok(update::UpdateCheck {
+        current: current.to_string(),
+        can_install: available.is_some() && install_note.is_none(),
+        available,
+        install_note,
+    })
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+enum UpdateProgress {
+    Progress { done: u64, total: Option<u64> },
+    Installing,
+}
+
+/// Downloads a signed update, checks its signature, installs it and restarts.
+#[tauri::command]
+async fn install_update(
+    app: AppHandle,
+    manifest: String,
+    events: Channel<UpdateProgress>,
+) -> CmdResult<()> {
+    use tauri_plugin_updater::UpdaterExt;
+    if !manifest.starts_with(update::DOWNLOAD_PREFIX) || !manifest.ends_with("/latest.json") {
+        return Err("That update doesn't come from GhostKey's releases".into());
+    }
+    if !updater_key_set(&app) {
+        return Err("This build can't check signed updates".into());
+    }
+    if let Some(note) = update::platform_note() {
+        return Err(note.into());
+    }
+    let url = manifest.parse().map_err(err)?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(err)?
+        .build()
+        .map_err(err)?;
+    let Some(found) = updater.check().await.map_err(err)? else {
+        return Err("GhostKey is already up to date".into());
+    };
+    let mut done = 0u64;
+    let progress = events.clone();
+    found
+        .download_and_install(
+            move |chunk, total| {
+                done += chunk as u64;
+                let _ = progress.send(UpdateProgress::Progress { done, total });
+            },
+            move || {
+                let _ = events.send(UpdateProgress::Installing);
+            },
+        )
+        .await
+        .map_err(err)?;
+    app.restart();
 }
 
 /// Where settings.json lives, plus the settings themselves.
@@ -461,6 +547,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = config_dir(app.handle());
             let data = app.path().app_data_dir().unwrap_or_else(|_| dir.clone());
@@ -491,6 +578,8 @@ pub fn run() {
             sftp_cancel,
             list_tmux,
             serial_ports,
+            check_update,
+            install_update,
             list_bookmarks,
             save_bookmark,
             delete_bookmark,

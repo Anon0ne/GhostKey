@@ -27,6 +27,7 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **tmux (new):** give a saved session a tmux session name and it attaches to that session on connect, creating it if needed, so programs keep running when the connection drops and a reconnect picks up where you were. **Session → tmux sessions…** lists what's running on the server and opens one in a new tab, or starts a new one. Without tmux on the server you get an ordinary shell. Names are checked and quoted, and GhostKey never ends a tmux session; closing the tab only detaches.
 - **Evidence bookmarks (new):** select text and press Ctrl+Shift+M (or **Edit → Bookmark selection…**) to keep it with a note, the session it came from and the time. The excerpt is kept as selected, even after it scrolls away. **Edit → Bookmarks…** lists them, lets you make a redacted copy beside the untouched original (with suggestions for passwords, tokens and keys), and exports the ones you tick as Markdown or JSON. Exports say which excerpts are redacted copies and that this isn't a forensic record. Bookmarks are stored in `bookmarks.json`, readable only by you.
 - **Local terminal, Telnet and serial (new):** **File → New local terminal** (Ctrl+Shift+N) opens a shell on this computer in a tab: PowerShell on Windows, your login shell elsewhere, or any program you set in **Settings → Terminal → Local shell** (such as `pwsh`, `cmd.exe` or `wsl.exe`). Splitting it opens another local shell. In **New session**, set **Type** to **Telnet** for old switches and routers (the editor warns that Telnet sends passwords as plain text) or to **Serial port** for a console cable: pick the port (GhostKey lists the ones it finds), the speed and the line settings (data bits, parity, stop bits, flow control). These terminals get logging, Find, snippets, broadcast and bookmarks like SSH ones; files, tunnels and tmux need SSH, so they're hidden there.
+- **Updates (new):** GhostKey checks GitHub for a newer release when it starts (turn this off, or leave out alpha and beta builds, in **Settings → Updates**) and shows **Update: x.y.z** at the top right. **Help → Check for updates…** checks at once. The dialog shows the release notes and opens the release page; on Windows and the AppImage, a signed release can be installed in place with **Install and restart**, after GhostKey checks its signature. `.deb` and `.rpm` installs are updated by downloading the new package. Only the list of releases is fetched; nothing about you or your sessions is sent.
 - **Workspaces (new):** **File → Save workspace…** keeps your tabs and splits under a name, with the saved session each pane uses. **File → Open workspace…** shows every pane first and opens the layout in new tabs. Only the panes you tick connect; the rest wait with a **Connect** button, and production sessions start unticked. A workspace holds no passwords or commands.
 - **Profiles (new):** **File → Export profile…** saves your sessions, snippets and workspaces to one JSON file, and **Import profile…** brings them in on another computer. Before importing you see what's new, what differs from yours and what's already the same; your own versions are kept unless you choose to replace them, and nothing is deleted. Passwords and passphrases are never exported, and key paths under your home folder are written as `~/…`. Key files themselves aren't copied.
 - **Menu bar and Settings (new):** File, Edit, View, Session and Help menus across the top, like a normal desktop program. **File → Settings** (Ctrl+,) picks the theme (Kali Dark, Kali Light, Dracula, Solarized Dark, High contrast), font and size, cursor, scrollback, copy on select, a default user and port for Quick connect, and the log folder. Changes show as you make them, and Cancel puts them back. **View** hides the session list (Ctrl+Shift+B) or the snippet bar.
@@ -69,6 +70,19 @@ Every push builds installers in GitHub Actions. Open the latest **CI** run on th
 The Windows installers aren't code-signed yet, so SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
 Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the [Releases page](../../releases).
+
+### Signed updates (for maintainers)
+
+In-place updates need a signing key pair. Make one once, on your own computer, and keep the private key out of the repository:
+
+```sh
+npx tauri signer generate -w ~/.tauri/ghostkey.key
+```
+
+1. Put the contents of `~/.tauri/ghostkey.key.pub` in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`, and commit it.
+2. In the repository's **Settings → Secrets and variables → Actions**, add `TAURI_SIGNING_PRIVATE_KEY` (the contents of `~/.tauri/ghostkey.key`) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+
+The release workflow then signs the installers and attaches `latest.json`, and copies built with the public key can install that release in place. Without the secret the release still builds and the app points people to the release page. Losing the private key means copies already installed can't take signed updates from a new key, so keep a backup.
 
 ## Keyboard shortcuts
 

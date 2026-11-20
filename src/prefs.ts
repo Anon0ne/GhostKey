@@ -20,6 +20,10 @@ export interface Prefs {
   autoReconnect: boolean;
   /** Program for File → New local terminal; empty for the system's default shell. */
   localShell: string;
+  /** Look for a newer release on GitHub when GhostKey starts. */
+  checkUpdates: boolean;
+  /** Offer alpha and beta releases too, not only stable ones. */
+  preReleaseUpdates: boolean;
 }
 
 export const MIN_FONT_SIZE = 9;
@@ -52,6 +56,8 @@ export const DEFAULT_PREFS: Prefs = {
   defaultPort: 22,
   autoReconnect: true,
   localShell: "",
+  checkUpdates: true,
+  preReleaseUpdates: true,
 };
 
 function int(v: unknown, min: number, max: number, fallback: number): number {
@@ -81,6 +87,8 @@ export function normalizePrefs(raw: unknown, themes: string[]): Prefs {
     defaultPort: int(r.defaultPort, 1, 65535, d.defaultPort),
     autoReconnect: bool(r.autoReconnect, d.autoReconnect),
     localShell: typeof r.localShell === "string" ? r.localShell.trim().slice(0, 512) : d.localShell,
+    checkUpdates: bool(r.checkUpdates, d.checkUpdates),
+    preReleaseUpdates: bool(r.preReleaseUpdates, d.preReleaseUpdates),
   };
 }
 

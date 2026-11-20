@@ -34,6 +34,10 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 vte = "0.14"
 portable-pty = "0.9"
 serialport = { version = "4", default-features = false }
+tauri-plugin-updater = "2"
+semver = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
