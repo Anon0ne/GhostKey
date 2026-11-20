@@ -8,7 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 
-import { api, type ConnectRequest, type SavedSession } from "./api";
+import { api, type SavedSession } from "./api";
 import { ansi, type BaseRequest } from "./connection";
 import { clampRatio, leaf, nearest, panes, remove, split, type Dir, type Direction, type LayoutNode } from "./layout";
 import { planRows, problem, toSessions, type Row, type Scan } from "./importPlan";
@@ -23,6 +23,7 @@ import { ENVIRONMENTS, envBadge, envInfo, isProduction, matchesSearch, parseTags
 import { report, stageLabel, type Step } from "./diagnostics";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
+import { jumpChain, jumpChoices, routeText } from "./jumps";
 import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } from "./workspace";
 import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
@@ -249,6 +250,60 @@ function removeTab(tab: Tab) {
   if (tabs.length === 0) newTab();
   else if (tab === current) selectTab(tabs[Math.min(i, tabs.length - 1)]);
   else renderTabs();
+}
+
+/** Moves a pane, still connected, into another tab (split beside its active pane) or a new tab. */
+function movePane(pane: Pane, to: Tab | null) {
+  const from = tabOf(pane);
+  if (!from || to === from || (!to && panes(from.root).length === 1)) return;
+  const rest = remove(from.root, pane);
+  let target: Tab;
+  if (to) {
+    to.root = split(to.root, to.active, pane, "row");
+    to.active = pane;
+    target = to;
+  } else {
+    target = { root: leaf(pane), active: pane, el: el("div", { class: "tab-body", hidden: true }) };
+    $("workspace").append(target.el);
+    tabs.splice(tabs.indexOf(from) + 1, 0, target);
+  }
+  if (rest) {
+    from.root = rest;
+    if (from.active === pane) from.active = panes(rest)[0];
+    renderLayout(from);
+  } else {
+    tabs.splice(tabs.indexOf(from), 1);
+    from.el.remove();
+  }
+  renderLayout(target);
+  selectTab(target);
+  focusPane(pane);
+  renderBroadcast();
+}
+
+function tabLabel(tab: Tab): string {
+  const names = panes(tab.root).map((p) => (p.conn.request ? p.conn.title : "empty"));
+  return `Tab ${tabs.indexOf(tab) + 1}: ${names.join(", ")}`;
+}
+
+async function chooseMoveTarget() {
+  const pane = activePane();
+  const others = tabs.filter((t) => t !== current);
+  if (!others.length) return;
+  const picker = el("select", { "aria-label": "Tab" }, ...others.map((t, i) => el("option", { value: String(i), text: tabLabel(t) })));
+  const ok = await showModal<boolean>({
+    title: "Move pane to tab",
+    body: [
+      el("p", { text: `Moves ${pane.conn.request ? pane.conn.title : "this pane"} into another tab, beside its active pane. The connection stays open.` }),
+      field("Tab", picker),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Move", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+  }).result;
+  if (ok) movePane(pane, others[Number(picker.value)]);
 }
 
 function moveFocus(dir: Direction) {
@@ -981,22 +1036,20 @@ function sessionRow(s: SavedSession): HTMLElement {
 }
 
 function connectSaved(s: SavedSession) {
-  const req = requestFor(s);
-  if (!req) {
-    void confirm("Jump host missing", `"${s.name}" connects through a saved session that no longer exists. Choose another jump host in its settings.`, "OK");
+  const chain = jumpChain(s, sessions);
+  if (!chain.ok) {
+    void confirm("Can't reach this session", chain.error, "OK");
     return;
   }
-  openSession(req, s.name);
+  const req = requestFor(s);
+  if (req) openSession(req, s.name);
 }
 
-/** The connection settings for a saved session, or null when its jump host is gone. */
+/** The connection settings for a saved session, or null when its jump hosts can't be used. */
 function requestFor(s: SavedSession): BaseRequest | null {
-  let jump: ConnectRequest["jump"] = null;
-  if (s.jumpSession) {
-    const j = sessions.find((x) => x.id === s.jumpSession);
-    if (!j) return null;
-    jump = { sessionId: j.id, host: j.host, port: j.port, username: j.username, auth: j.auth, keyPath: j.keyPath };
-  }
+  const chain = jumpChain(s, sessions);
+  if (!chain.ok) return null;
+  const jumps = chain.hops.map((j) => ({ sessionId: j.id, host: j.host, port: j.port, username: j.username, auth: j.auth, keyPath: j.keyPath }));
   return (
     {
       sessionId: s.id,
@@ -1009,7 +1062,7 @@ function requestFor(s: SavedSession): BaseRequest | null {
       log: s.autoLog,
       label: s.name,
       forwards: s.forwards ?? [],
-      jump,
+      jumps,
     }
   );
 }
@@ -1055,16 +1108,24 @@ async function editSession(existing?: Partial<SavedSession>) {
   const [autoRow, autoOpen] = checkbox("Open Tailscale sign-in links automatically", s.autoOpenTailscale);
   const [logRow, autoLog] = checkbox("Log this session to a file automatically", s.autoLog);
   const logHint = el("small", { class: "hint", text: "Logs hold everything the server prints, which can include secrets. Change the folder in Settings." });
-  // One hop: a session that itself uses a jump host can't be one.
-  const jumpChoices = sessions.filter((x) => x.id !== s.id && !x.jumpSession);
+  // A jump host can have its own jump host, as long as the route doesn't loop back here.
+  const choices = jumpChoices(s, sessions);
   const jump = el(
     "select",
     {},
     el("option", { value: "", text: "None, connect directly" }),
-    ...jumpChoices.map((x) => el("option", { value: x.id, text: `${x.name} (${x.username}@${x.host})` })),
+    ...choices.map((x) => el("option", { value: x.id, text: `${x.name} (${x.username}@${x.host})` })),
   );
-  jump.value = jumpChoices.some((x) => x.id === s.jumpSession) ? s.jumpSession! : "";
-  const jumpField = field("Jump host", jump, "Connect through another saved session first, like ssh -J. Each server's host key is checked.");
+  jump.value = choices.some((x) => x.id === s.jumpSession) ? s.jumpSession! : "";
+  const route = el("small", { class: "hint route" });
+  const syncRoute = () => {
+    const via = choices.find((x) => x.id === jump.value);
+    const chain = via ? jumpChain(via, sessions) : null;
+    route.textContent = via && chain?.ok ? `Route: ${routeText([...chain.hops, via], "this server")}` : "";
+  };
+  jump.addEventListener("change", syncRoute);
+  syncRoute();
+  const jumpField = field("Jump host", el("div", {}, jump, route), "Connect through another saved session first, like ssh -J. If it has its own jump host, GhostKey goes through that too. Each server's host key is checked.");
   const tunnels = savedTunnelsEditor(s.forwards);
 
   let forget: HTMLElement = el("span");
@@ -1174,7 +1235,7 @@ $("quick-connect").addEventListener("submit", (e) => {
   }
   const title = `${parsed.user}@${parsed.host}`;
   openSession(
-    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jump: null },
+    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jumps: [] },
     title,
   );
 });
@@ -1529,6 +1590,8 @@ const menus: Menu[] = [
       "-",
       { label: "Split right", shortcut: "Ctrl+Shift+R", run: () => splitPane("row") },
       { label: "Split down", shortcut: "Ctrl+Shift+D", run: () => splitPane("column") },
+      { label: "Move pane to new tab", run: () => movePane(activePane(), null), enabled: () => panes(current.root).length > 1 },
+      { label: "Move pane to tab…", run: () => void chooseMoveTarget(), enabled: () => tabs.length > 1 },
       { label: "Next tab", shortcut: "Ctrl+PgDn", run: () => selectTab(tabs[(tabs.indexOf(current) + 1) % tabs.length]), enabled: () => tabs.length > 1 },
       { label: "Previous tab", shortcut: "Ctrl+PgUp", run: () => selectTab(tabs[(tabs.indexOf(current) - 1 + tabs.length) % tabs.length]), enabled: () => tabs.length > 1 },
     ],

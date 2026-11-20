@@ -48,9 +48,10 @@ pub struct ConnectRequest {
     /// Tunnels to start once the shell is open (those set to start automatically).
     #[serde(default)]
     pub forwards: Vec<Forward>,
-    /// Reach the server through this host first (one hop, like ProxyJump).
+    /// Reach the server through these hosts first, outermost first, like
+    /// `ssh -J a,b`. Empty connects directly.
     #[serde(default)]
-    pub jump: Option<JumpRequest>,
+    pub jumps: Vec<JumpRequest>,
     pub cols: u32,
     pub rows: u32,
 }
@@ -471,7 +472,7 @@ impl ConnCtx {
                 log: false,
                 label: String::new(),
                 forwards: Vec::new(),
-                jump: None,
+                jumps: Vec::new(),
                 cols: self.req.cols,
                 rows: self.req.rows,
             },
@@ -714,6 +715,29 @@ async fn tcp_connect(
     Err(NetworkError(last.unwrap_or_default()).into())
 }
 
+/// Most jump hosts a connection may go through.
+const MAX_JUMPS: usize = 5;
+
+/// Asks the jump host `via` to open a connection to `host:port`, the way
+/// `ssh -J` does. `ctx` is the context of whatever is being reached.
+async fn open_through(
+    ctx: &ConnCtx,
+    via: &client::Handle<Handler>,
+    via_name: &str,
+    host: &str,
+    port: u16,
+) -> anyhow::Result<russh::Channel<client::Msg>> {
+    ctx.step(Stage::Forward, false, Some(via_name.to_string()));
+    let channel = via
+        .channel_open_direct_tcpip(host.to_string(), port.into(), "127.0.0.1", 0)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("The jump host {via_name} couldn't reach {host}:{port}: {e}")
+        })?;
+    ctx.step(Stage::Forward, true, None);
+    Ok(channel)
+}
+
 /// Runs the SSH handshake over `stream`, checks the host key, and logs in.
 async fn login<S>(
     ctx: &ConnCtx,
@@ -759,45 +783,54 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     let req = ctx.req.clone();
     let remote: RemoteTargets = Arc::default();
 
-    // With a jump host, log in there first and reach the server through it.
+    // With jump hosts, log in to each in turn and reach the next through it.
     // Each hop checks its own host key and asks for its own login.
-    let mut jump_handle = None;
-    let handle = if let Some(jump) = req.jump.clone() {
-        let hop = ctx.hop(&jump);
-        ctx.status(format!(
-            "Connecting to jump host {}:{}…",
-            jump.host, jump.port
-        ));
-        let stream = tcp_connect(&hop, &jump.host, jump.port).await?;
-        ctx.status(format!("Logging in to jump host {}…", jump.host));
-        let jh = login(&hop, stream, Arc::default())
-            .await
-            .map_err(|e| anyhow::anyhow!("Jump host {}: {e:#}", jump.host))?;
-        ctx.status(format!(
-            "Reaching {}:{} through {}…",
-            req.host, req.port, jump.host
-        ));
-        ctx.step(Stage::Forward, false, None);
-        let channel = jh
-            .channel_open_direct_tcpip(req.host.clone(), req.port.into(), "127.0.0.1", 0)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "The jump host {} couldn't reach {}:{}: {e}",
-                    jump.host,
-                    req.host,
-                    req.port
-                )
-            })?;
-        ctx.step(Stage::Forward, true, None);
-        jump_handle = Some(jh);
-        ctx.status("Logging in…");
-        login(&ctx, channel.into_stream(), remote.clone()).await?
-    } else {
-        ctx.status(format!("Connecting to {}:{}…", req.host, req.port));
-        let stream = tcp_connect(&ctx, &req.host, req.port).await?;
-        ctx.status("Logging in…");
-        login(&ctx, stream, remote.clone()).await?
+    if req.jumps.len() > MAX_JUMPS {
+        anyhow::bail!("Too many jump hosts: at most {MAX_JUMPS} are allowed");
+    }
+    let mut jump_handles: Vec<client::Handle<Handler>> = Vec::new();
+    for (i, jump) in req.jumps.iter().enumerate() {
+        let hop = ctx.hop(jump);
+        let jh = match jump_handles.last() {
+            None => {
+                ctx.status(format!(
+                    "Connecting to jump host {}:{}…",
+                    jump.host, jump.port
+                ));
+                let stream = tcp_connect(&hop, &jump.host, jump.port).await?;
+                ctx.status(format!("Logging in to jump host {}…", jump.host));
+                login(&hop, stream, Arc::default()).await
+            }
+            Some(prev) => {
+                let via = &req.jumps[i - 1].host;
+                ctx.status(format!(
+                    "Reaching jump host {}:{} through {via}…",
+                    jump.host, jump.port
+                ));
+                let channel = open_through(&hop, prev, via, &jump.host, jump.port).await?;
+                ctx.status(format!("Logging in to jump host {}…", jump.host));
+                login(&hop, channel.into_stream(), Arc::default()).await
+            }
+        }
+        .map_err(|e| anyhow::anyhow!("Jump host {}: {e:#}", jump.host))?;
+        jump_handles.push(jh);
+    }
+    let handle = match (jump_handles.last(), req.jumps.last()) {
+        (Some(via_handle), Some(via)) => {
+            ctx.status(format!(
+                "Reaching {}:{} through {}…",
+                req.host, req.port, via.host
+            ));
+            let channel = open_through(&ctx, via_handle, &via.host, &req.host, req.port).await?;
+            ctx.status("Logging in…");
+            login(&ctx, channel.into_stream(), remote.clone()).await?
+        }
+        _ => {
+            ctx.status(format!("Connecting to {}:{}…", req.host, req.port));
+            let stream = tcp_connect(&ctx, &req.host, req.port).await?;
+            ctx.status("Logging in…");
+            login(&ctx, stream, remote.clone()).await?
+        }
     };
 
     let handle = Arc::new(handle);
@@ -886,7 +919,8 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     stop_log(&ctx, &mut log);
     tunnels.stop_all();
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
-    if let Some(jh) = jump_handle {
+    // Close the hops from the inside out.
+    for jh in jump_handles.iter().rev() {
         let _ = jh.disconnect(Disconnect::ByApplication, "", "en").await;
     }
     Ok(ended)
@@ -1262,7 +1296,7 @@ mod live {
             log: auth == AuthMethod::Password,
             label: "live test".into(),
             forwards: Vec::new(),
-            jump: None,
+            jumps: Vec::new(),
             cols: 80,
             rows: 24,
         };
@@ -1546,6 +1580,52 @@ mod live {
             .file_name()
             .to_string_lossy()
             .contains("gone")));
+
+        // Folders go both ways with nested files, and merge only when asked.
+        let go = AtomicBool::new(false);
+        let src = dir.path().join("tree");
+        std::fs::create_dir_all(src.join("sub/deeper")).unwrap();
+        std::fs::write(src.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(src.join("sub/deeper/b.txt"), b"beta").unwrap();
+        let rtree = crate::sftp::join(&work, "tree");
+        crate::sftp::upload(&s, &src, &rtree, false, &go, &progress)
+            .await
+            .unwrap();
+        assert_eq!(*last.lock().unwrap(), (9, 9));
+        let e = crate::sftp::upload(&s, &src, &rtree, false, &go, &progress)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("already exists"), "{e}");
+        let down = dir.path().join("tree-back");
+        crate::sftp::download(&s, &rtree, &down, false, &go, &progress)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(down.join("a.txt")).unwrap(), b"alpha");
+        assert_eq!(
+            std::fs::read(down.join("sub/deeper/b.txt")).unwrap(),
+            b"beta"
+        );
+        assert!(
+            crate::sftp::download(&s, &rtree, &down, false, &go, &progress)
+                .await
+                .is_err()
+        );
+        std::fs::write(src.join("a.txt"), b"alpha 2").unwrap();
+        crate::sftp::upload(&s, &src, &rtree, true, &go, &progress)
+            .await
+            .unwrap();
+        crate::sftp::download(&s, &rtree, &down, true, &go, &progress)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(down.join("a.txt")).unwrap(), b"alpha 2");
+        for f in ["a.txt", "sub/deeper/b.txt"] {
+            s.remove_file(format!("{rtree}/{f}")).await.unwrap();
+        }
+        for d in ["sub/deeper", "sub", ""] {
+            s.remove_dir(format!("{rtree}/{d}").trim_end_matches('/').to_string())
+                .await
+                .unwrap();
+        }
 
         s.remove_file(remote).await.unwrap();
         s.remove_dir(work).await.unwrap();
@@ -1884,8 +1964,16 @@ mod live {
             auto_start: true,
         };
 
-        // Through a jump host (the same server, reached as itself), with a local
-        // forward to the server's own SSH port started on connect.
+        // Through two jump hosts (the same server, reached as itself each time),
+        // with a local forward to the server's own SSH port started on connect.
+        let hop = JumpRequest {
+            session_id: None,
+            host: env.host.clone(),
+            port: env.port,
+            username: env.user.clone(),
+            auth: AuthMethod::Password,
+            key_path: None,
+        };
         let local = fwd(ForwardKind::Local, free_port(), env.port);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let tx2 = tx.clone();
@@ -1910,14 +1998,7 @@ mod live {
                 log: false,
                 label: String::new(),
                 forwards: vec![local.clone()],
-                jump: Some(JumpRequest {
-                    session_id: None,
-                    host: env.host.clone(),
-                    port: env.port,
-                    username: env.user.clone(),
-                    auth: AuthMethod::Password,
-                    key_path: None,
-                }),
+                jumps: vec![hop.clone(), hop],
                 cols: 80,
                 rows: 24,
             },
@@ -1929,10 +2010,10 @@ mod live {
             _ => yes(&[&pw]),
         })
         .await;
-        assert_eq!(closed, None, "login through the jump host failed");
-        // Two logins: the jump host, then the server.
+        assert_eq!(closed, None, "login through the jump hosts failed");
+        // Three logins: each jump host, then the server.
         let logins = kinds.iter().filter(|k| *k != "hostKey").count();
-        assert_eq!(logins, 2, "{kinds:?}");
+        assert_eq!(logins, 3, "{kinds:?}");
 
         let t = tunnel(&mut rx, local.id, TunnelState::Listening).await;
         assert_eq!(

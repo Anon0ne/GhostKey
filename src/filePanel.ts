@@ -97,9 +97,10 @@ export class FilePanel {
     const up = tool("↑", "Up one folder", () => void this.load(remoteParent(this.path)));
     const refresh = tool("⟳", "Refresh", () => void this.load(this.path));
     const mkdir = tool("+", "New folder", () => void this.newFolder());
-    const upload = tool("⇧", "Upload files…", () => void this.chooseUploads());
+    const upload = tool("⇧", "Upload files…", () => void this.chooseUploads(false));
+    const uploadDir = tool("⇪", "Upload a folder…", () => void this.chooseUploads(true));
     const close = tool("×", "Close files (Ctrl+Shift+E)", () => this.onClose());
-    this.toolButtons = [up, refresh, mkdir, upload];
+    this.toolButtons = [up, refresh, mkdir, upload, uploadDir];
 
     this.list = el("div", { class: "files-list", role: "listbox", "aria-multiselectable": "true", tabindex: "0" });
     this.list.addEventListener("keydown", (e) => this.onListKey(e));
@@ -120,11 +121,11 @@ export class FilePanel {
     this.el = el(
       "aside",
       { class: "files", "aria-label": "Remote files" },
-      el("div", { class: "files-bar" }, up, this.pathInput, refresh, mkdir, upload, close),
+      el("div", { class: "files-bar" }, up, this.pathInput, refresh, mkdir, upload, uploadDir, close),
       this.message,
       this.list,
       el("div", { class: "files-actions" }, this.actions.download, this.actions.rename, this.actions.remove),
-      el("p", { class: "files-hint", text: "Drop files here to upload them to this folder." }),
+      el("p", { class: "files-hint", text: "Drop files or folders here to upload them to this folder." }),
       this.transfersEl,
     );
     panels.add(this);
@@ -304,8 +305,8 @@ export class FilePanel {
   private updateActions() {
     const sel = this.selection();
     const online = this.conn.online;
-    this.actions.download.disabled = !online || sel.length === 0 || sel.some(isDir);
-    this.actions.download.title = sel.some(isDir) ? "Folder downloads aren't supported yet" : "";
+    this.actions.download.disabled = !online || sel.length === 0;
+    this.actions.download.title = sel.some(isDir) ? "Folders are downloaded with everything in them. Links inside are skipped." : "";
     this.actions.rename.disabled = !online || sel.length !== 1;
     this.actions.remove.disabled = !online || sel.length === 0;
   }
@@ -398,7 +399,7 @@ export class FilePanel {
   private async download(entries: Entry[]) {
     const id = this.conn.id;
     const dir = this.path;
-    const files = entries.filter((e) => !isDir(e));
+    const files = entries;
     if (id == null || files.length === 0) return;
     const start = downloadDir ?? (await api.defaultDownloadDir().catch(() => null)) ?? undefined;
     const picked = await openDialog({ directory: true, multiple: false, defaultPath: start, title: "Download to folder" });
@@ -409,12 +410,13 @@ export class FilePanel {
       const local = localJoin(picked, safeLocalName(e.name));
       const kind = await api.localKind(local).catch(() => "missing");
       let overwrite = false;
-      if (kind === "dir") {
-        this.addFailed(`↓ ${e.name}`, `${local} is a folder`);
+      const folder = isDir(e);
+      if (kind !== "missing" && (kind === "dir") !== folder) {
+        this.addFailed(`↓ ${e.name}`, `${local} already exists and is a ${kind === "dir" ? "folder" : "file"}`);
         continue;
       }
-      if (kind === "file") {
-        const decision = await this.resolveConflict(policy, local, files.length > 1);
+      if (kind !== "missing") {
+        const decision = await this.resolveConflict(policy, local, files.length > 1, folder);
         if (decision.all) policy = decision.replace ? "replace" : "skip";
         if (!decision.replace) continue;
         overwrite = true;
@@ -424,10 +426,10 @@ export class FilePanel {
     }
   }
 
-  private async chooseUploads() {
+  private async chooseUploads(folders: boolean) {
     const id = this.conn.id;
     const dir = this.path;
-    const picked = await openDialog({ multiple: true, directory: false, title: `Upload to ${this.path}` });
+    const picked = await openDialog({ multiple: true, directory: folders, title: folders ? `Upload folders to ${this.path}` : `Upload to ${this.path}` });
     if (!picked || id !== this.conn.id || dir !== this.path || !this.conn.online) return;
     await this.uploadPaths(Array.isArray(picked) ? picked : [picked]);
   }
@@ -440,8 +442,8 @@ export class FilePanel {
     for (const local of paths) {
       const name = localName(local);
       const kind = await api.localKind(local).catch(() => "missing");
-      if (kind !== "file") {
-        this.addFailed(`↑ ${name}`, kind === "dir" ? "Folder uploads aren't supported yet" : "File not found");
+      if (kind === "missing") {
+        this.addFailed(`↑ ${name}`, "File not found");
         continue;
       }
       const remote = remoteJoin(dir, name);
@@ -454,7 +456,7 @@ export class FilePanel {
         continue;
       }
       if (exists) {
-        const decision = await this.resolveConflict(policy, `${this.conn.title}:${remote}`, paths.length > 1);
+        const decision = await this.resolveConflict(policy, `${this.conn.title}:${remote}`, paths.length > 1, kind === "dir");
         if (decision.all) policy = decision.replace ? "replace" : "skip";
         if (!decision.replace) continue;
         overwrite = true;
@@ -467,12 +469,15 @@ export class FilePanel {
   }
 
   /** Asks before replacing a file, unless an earlier answer applies to all. */
-  private async resolveConflict(policy: Conflict, target: string, several: boolean): Promise<{ replace: boolean; all: boolean }> {
+  private async resolveConflict(policy: Conflict, target: string, several: boolean, folder = false): Promise<{ replace: boolean; all: boolean }> {
     if (policy !== "ask") return { replace: policy === "replace", all: true };
     const [allRow, all] = checkbox("Do the same for the other files");
     const replace = await showModal<boolean>({
-      title: "Replace existing file?",
-      body: [el("p", { text: `${target} already exists.` }), several ? allRow : el("span")],
+      title: folder ? "Folder already exists" : "Replace existing file?",
+      body: [
+        el("p", { text: folder ? `${target} already exists. Replace merges into it: files with the same names are replaced, and nothing else there is removed.` : `${target} already exists.` }),
+        several ? allRow : el("span"),
+      ],
       // Enter keeps the existing file.
       buttons: [
         { label: "Skip", value: () => false, primary: true },

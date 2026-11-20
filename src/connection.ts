@@ -142,7 +142,7 @@ export class Connection {
     this.closed = false;
     this.logPath = null;
     this.tunnels = [];
-    this.trace.start({ host: req.host, port: req.port, username: req.username, jump: req.jump?.host ?? null }, this.now());
+    this.trace.start({ host: req.host, port: req.port, username: req.username, jump: req.jumps?.length ? req.jumps.map((j) => j.host).join(" → ") : null }, this.now());
     if (resume) this.hooks.writeln(ansi.dim(`Reconnecting (try ${this.attempt} of ${RECONNECT_DELAYS.length})…`));
     else this.hooks.reset();
     this.hooks.hideBanner();
