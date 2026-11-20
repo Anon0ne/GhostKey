@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './load.mjs';
 
-const { Connection } = load('connection.ts');
+const diagnostics = load('diagnostics.ts');
+const { Connection } = load('connection.ts', { './diagnostics': diagnostics });
 
 // A Connection with a fake native bridge that records every call.
 function client(extraHooks = {}) {

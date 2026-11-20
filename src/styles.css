@@ -1415,3 +1415,46 @@ textarea.snippet-input:focus {
   padding-left: 20px;
   font-family: var(--mono);
 }
+
+/* Connection diagnostics */
+.diag-steps {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.diag-step {
+  display: grid;
+  grid-template-columns: 22px minmax(180px, auto) 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.diag-step:first-child { border-top: 0; }
+.diag-mark { font-weight: 700; text-align: center; }
+.diag-step.ok .diag-mark { color: var(--green); }
+.diag-step.failed .diag-mark, .diag-step.failed .diag-label { color: var(--error); }
+.diag-step.running .diag-mark { color: var(--muted); }
+.diag-detail { color: var(--muted); font-family: var(--mono, monospace); font-size: 12px; overflow-wrap: anywhere; }
+.diag-ms { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.diag-error { color: var(--error); white-space: pre-wrap; overflow-wrap: anywhere; }
+.diag-advice {
+  border-left: 3px solid var(--yellow);
+  padding: 4px 10px;
+  margin: 8px 0;
+}
+.diag-report {
+  max-height: 180px;
+  overflow: auto;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.diag-copy { display: flex; align-items: center; gap: 10px; }

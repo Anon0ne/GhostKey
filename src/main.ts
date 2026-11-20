@@ -17,6 +17,8 @@ import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { openTunnels, savedTunnelsEditor, tunnelsChanged } from "./tunnelUi";
 import { Broadcast } from "./broadcast";
+import { report, stageLabel, type Step } from "./diagnostics";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
 import { THEME_IDS, THEMES, themeById } from "./theme";
@@ -293,6 +295,7 @@ function renderToolbar() {
   const stop = $<HTMLButtonElement>("disconnect");
   stop.hidden = !conn.active;
   stop.textContent = conn.stopLabel;
+  $("diagnostics").hidden = !(conn.state === "error" && conn.trace.outcome !== "none");
   const retry = $<HTMLButtonElement>("reconnect");
   retry.hidden = !conn.canRetry;
   retry.textContent = conn.retryLabel;
@@ -1236,6 +1239,7 @@ const menus: Menu[] = [
       { label: "Session log", shortcut: "Ctrl+Shift+L", checked: () => !!conn().logPath, run: () => conn().toggleLog(), enabled: () => conn().online },
       { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles() },
       { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online },
+      { label: "Connection diagnostics…", run: () => void showDiagnostics() },
       "-",
       { label: "Broadcast input…", shortcut: "Ctrl+Shift+I", run: () => void chooseBroadcast() },
       { label: "Stop broadcasting", run: stopBroadcast, enabled: () => broadcast.on },
@@ -1314,6 +1318,74 @@ async function chooseBroadcast() {
   activePane().focus();
 }
 
+// ---------------------------------------------------------------- diagnostics
+
+function stepRow(s: Step): HTMLElement {
+  const mark = s.state === "ok" ? "✓" : s.state === "failed" ? "✗" : "…";
+  return el(
+    "li",
+    { class: `diag-step ${s.state}` },
+    el("span", { class: "diag-mark", text: mark, "aria-label": s.state }),
+    el("span", { class: "diag-label", text: stageLabel(s) }),
+    el("span", { class: "diag-detail", text: s.detail ?? "" }),
+    el("span", { class: "diag-ms", text: s.ms === null ? "" : `${s.ms} ms` }),
+  );
+}
+
+/** Shows how far the active pane's last connection got, and lets the user copy a report. */
+async function showDiagnostics() {
+  const pane = activePane();
+  const trace = pane.conn.trace;
+  if (trace.outcome === "none") {
+    await confirm("Connection diagnostics", "This pane hasn't connected yet. Connect to a server, then open diagnostics to see each stage.", "OK");
+    return;
+  }
+  const version = await getVersion().catch(() => "");
+  const platform = navigator.userAgent.includes("Windows") ? "Windows" : navigator.userAgent.includes("Mac") ? "macOS" : "Linux";
+  const [hostRow, includeHost] = checkbox("Include host names, user names and addresses");
+  const preview = el("pre", { class: "diag-report" });
+  const update = () => {
+    preview.textContent = report(trace, { includeHost: includeHost.checked, version, platform });
+  };
+  includeHost.addEventListener("change", update);
+  update();
+  const copied = el("span", { class: "hint", role: "status" });
+  const copy = el("button", { class: "btn", type: "button", text: "Copy diagnostics" });
+  copy.addEventListener("click", () => {
+    Promise.resolve(writeText(preview.textContent ?? ""))
+      .then(() => (copied.textContent = "Copied."))
+      .catch((e) => (copied.textContent = `Couldn't copy: ${e}`));
+  });
+  const outcome: Record<string, string> = {
+    connecting: "Still connecting.",
+    connected: "Connected.",
+    failed: trace.summary ?? "The connection failed.",
+    lost: "Connected, then the connection was lost.",
+    closed: "The connection closed.",
+  };
+  const advice = trace.advice();
+  await showModal<void>({
+    title: "Connection diagnostics",
+    wide: true,
+    body: [
+      el("p", { text: `${pane.conn.title}: ${outcome[trace.outcome] ?? ""}` }),
+      el("ol", { class: "diag-steps" }, ...trace.steps.map(stepRow)),
+      trace.error ? el("p", { class: "diag-error", text: trace.error }) : el("span"),
+      advice ? el("p", { class: "diag-advice", text: advice }) : el("span"),
+      el("h3", { text: "Report" }),
+      el("p", { class: "hint", text: "Review it before you share it. Sign-in tokens and your local account name are always removed." }),
+      hostRow,
+      preview,
+      el("div", { class: "diag-copy" }, copy, copied),
+    ],
+    buttons: [
+      ...(pane.conn.canRetry ? [{ label: pane.conn.retryLabel, value: () => pane.conn.retry() }] : []),
+      { label: "Close", value: () => undefined, primary: true },
+    ],
+    onDismiss: () => undefined,
+  }).result;
+}
+
 // ---------------------------------------------------------------- network recovery
 
 // After sleep or a network change, check every connection at once instead of
@@ -1337,6 +1409,7 @@ $("settings").addEventListener("click", openSettings);
 $("new-tab").addEventListener("click", () => newTab());
 $("disconnect").addEventListener("click", () => activePane().conn.disconnect());
 $("reconnect").addEventListener("click", () => activePane().conn.retry());
+$("diagnostics").addEventListener("click", () => void showDiagnostics());
 $("log-toggle").addEventListener("click", () => activePane().conn.toggleLog());
 $("terminal-find").addEventListener("click", () => activePane().openSearch());
 $("files-toggle").addEventListener("click", () => activePane().toggleFiles());
