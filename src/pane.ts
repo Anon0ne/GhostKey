@@ -215,6 +215,13 @@ export class Pane {
     this.term.writeln("");
   }
 
+  /** Shown in a workspace pane that hasn't connected yet. */
+  waiting(name: string) {
+    this.term.reset();
+    this.term.writeln(ansi.info(`  ${name}`));
+    this.term.writeln(ansi.dim("  From a workspace. Not connected yet: press Connect above when you're ready."));
+  }
+
   copy() {
     if (this.term.hasSelection()) writeText(this.term.getSelection());
   }

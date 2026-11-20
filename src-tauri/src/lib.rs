@@ -10,6 +10,7 @@ mod settings;
 mod sftp;
 mod snippets;
 mod ssh;
+mod workspaces;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -23,6 +24,7 @@ use sessions::{SavedSession, SessionStore};
 use sftp::{Listing, TransferEvent, Transfers};
 use snippets::{Snippet, SnippetStore};
 use ssh::{ConnEvent, ConnectRequest, PromptAnswer, Sinks, Ssh};
+use workspaces::{Workspace, WorkspaceStore};
 
 /// Commands return errors to the UI as plain strings.
 type CmdResult<T> = Result<T, String>;
@@ -49,6 +51,31 @@ fn list_snippets(store: State<'_, SnippetStore>) -> CmdResult<Vec<Snippet>> {
 #[tauri::command]
 fn save_snippet(store: State<'_, SnippetStore>, snippet: Snippet) -> CmdResult<()> {
     store.save(snippet).map_err(err)
+}
+
+#[tauri::command]
+fn list_workspaces(store: State<'_, WorkspaceStore>) -> CmdResult<Vec<Workspace>> {
+    store.list().map_err(err)
+}
+
+#[tauri::command]
+fn save_workspace(store: State<'_, WorkspaceStore>, workspace: Workspace) -> CmdResult<()> {
+    store.save(workspace).map_err(err)
+}
+
+#[tauri::command]
+fn delete_workspace(store: State<'_, WorkspaceStore>, id: Uuid) -> CmdResult<()> {
+    store.delete(id).map_err(err)
+}
+
+#[tauri::command]
+fn read_text_file(path: String) -> CmdResult<String> {
+    workspaces::read_text(&keys::expand_home(&path)).map_err(err)
+}
+
+#[tauri::command]
+fn write_text_file(path: String, text: String) -> CmdResult<()> {
+    workspaces::write_text(&keys::expand_home(&path), &text).map_err(err)
 }
 
 #[tauri::command]
@@ -414,6 +441,7 @@ pub fn run() {
             };
             app.manage(SessionStore::new(dir.join("sessions.json")));
             app.manage(SnippetStore::new(dir.join("snippets.json")));
+            app.manage(WorkspaceStore::new(dir.join("workspaces.json")));
             app.manage(Arc::new(Transfers::default()));
             app.manage(Arc::new(Ssh::new(dir.join("known_hosts"), state.log_dir())));
             app.manage(state);
@@ -438,6 +466,11 @@ pub fn run() {
             list_snippets,
             save_snippet,
             delete_snippet,
+            list_workspaces,
+            save_workspace,
+            delete_workspace,
+            read_text_file,
+            write_text_file,
             forget_secrets,
             key_inspect,
             key_generate,
