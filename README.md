@@ -19,6 +19,7 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **File browser (new):** press **Files** (Ctrl+Shift+E) to browse the server over SFTP beside the terminal, using the same login. Download files to a folder you pick, upload with the ⇧ button or by dropping files on the panel, and create folders, rename, or delete. Each transfer shows its progress and can be cancelled. A file is written under a temporary name and renamed only when it is complete, and GhostKey asks before replacing an existing file. Folders can't be transferred yet. If a server has no SFTP, the panel says so and the terminal is unaffected.
 - **Tunnels and jump hosts (new):** save port forwards with a session: local (`-L`), remote (`-R`), and SOCKS proxies (`-D`). You can type them the OpenSSH way, such as `-L 8080:db:5432`. They start when the session connects, listen on 127.0.0.1 unless you explicitly allow other computers, and stop when it disconnects. **Tunnels** in the toolbar shows each tunnel's address, open connections and errors (such as a port already in use), and lets you stop, retry, or add a temporary one. A session can also connect through another saved session as a jump host, like `ssh -J`. Each server's host key is checked and each asks for its own login.
 - **Session logging (new in 0.2):** save what a session prints to a timestamped text file, with colors removed. Start and stop it from the toolbar, or set a saved session to log automatically. Choose the folder in Settings.
+- **Reconnects on its own (new):** when a connection drops (Wi-Fi changes, the server reboots, the computer wakes from sleep), GhostKey says so in the terminal and tries again after 2, 4, 8, 16 and 30 seconds. The toolbar shows the countdown with **Reconnect now** and **Cancel**. It asks for a password again if one isn't saved, gives up on a refused login, and never reconnects after you type `exit` or press Disconnect. Saved tunnels set to start on connect come back with it. Each reconnect is a new shell, so programs from the old one are gone. Turn it off in Settings.
 - **Menu bar and Settings (new):** File, Edit, View, Session and Help menus across the top, like a normal desktop program. **File → Settings** (Ctrl+,) picks the theme (Kali Dark, Kali Light, Dracula, Solarized Dark, High contrast), font and size, cursor, scrollback, copy on select, a default user and port for Quick connect, and the log folder. Changes show as you make them, and Cancel puts them back. **View** hides the session list (Ctrl+Shift+B) or the snippet bar.
 
 | Tailscale sign-in | New host key | Session editor |
@@ -32,6 +33,10 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 | Tunnels | Settings | Menu bar |
 | --- | --- | --- |
 | ![Live tunnels with one port already in use](docs/screenshots/tunnels.png) | ![Settings](docs/screenshots/settings.png) | ![File menu](docs/screenshots/menu-bar.png) |
+
+| Reconnecting |
+| --- |
+| ![Reconnecting after the connection dropped](docs/screenshots/reconnect.png) |
 
 ## Install the alpha
 

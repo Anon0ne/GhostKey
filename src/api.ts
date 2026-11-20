@@ -75,7 +75,7 @@ export type ConnEvent =
   | { type: "connected" }
   | { type: "logging"; path: string | null; error: string | null }
   | { type: "tunnels"; tunnels: TunnelStatus[] }
-  | { type: "closed"; error: string | null };
+  | { type: "closed"; error: string | null; lost?: boolean; retryable?: boolean };
 
 export interface PromptAnswer {
   accept: boolean;
@@ -107,6 +107,8 @@ export const api = {
   openLink: (url: string) => invoke<void>("open_link", { url }),
   startLog: (id: number) => invoke<void>("start_log", { id }),
   stopLog: (id: number) => invoke<void>("stop_log", { id }),
+  /** Checks every connection now, after sleep or a network change. */
+  probeConnections: () => invoke<void>("probe_connections"),
   getLogDir: () => invoke<string>("get_log_dir"),
   setLogDir: (dir: string | null) => invoke<string>("set_log_dir", { dir }),
   openLogDir: () => invoke<void>("open_log_dir"),

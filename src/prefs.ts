@@ -16,6 +16,8 @@ export interface Prefs {
   /** Used by Quick connect when the address has no user, and for new sessions. */
   defaultUser: string;
   defaultPort: number;
+  /** Reconnect on its own when a connection drops, e.g. after sleep or a network change. */
+  autoReconnect: boolean;
 }
 
 export const MIN_FONT_SIZE = 9;
@@ -46,6 +48,7 @@ export const DEFAULT_PREFS: Prefs = {
   showSnippetBar: true,
   defaultUser: "",
   defaultPort: 22,
+  autoReconnect: true,
 };
 
 function int(v: unknown, min: number, max: number, fallback: number): number {
@@ -73,6 +76,7 @@ export function normalizePrefs(raw: unknown, themes: string[]): Prefs {
     showSnippetBar: bool(r.showSnippetBar, d.showSnippetBar),
     defaultUser: typeof r.defaultUser === "string" ? r.defaultUser.trim().slice(0, 64) : d.defaultUser,
     defaultPort: int(r.defaultPort, 1, 65535, d.defaultPort),
+    autoReconnect: bool(r.autoReconnect, d.autoReconnect),
   };
 }
 

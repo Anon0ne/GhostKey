@@ -19,6 +19,8 @@ export interface PaneHost {
   termOptions?(): ITerminalOptions;
   /** Copy the selection as soon as it is made. */
   copyOnSelect?(): boolean;
+  /** Reconnect on its own when the connection drops. */
+  autoReconnect?(): boolean;
   /** The pane wants focus, e.g. to show a login prompt. */
   activate(pane: Pane): void;
   changed(pane: Pane): void;
@@ -137,6 +139,7 @@ export class Pane {
         this.files?.sync();
         host.changed(this);
       },
+      autoReconnect: () => host.autoReconnect?.() ?? false,
     });
 
     this.term.onData((data) => this.conn.input(data));

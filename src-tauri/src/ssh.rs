@@ -95,7 +95,33 @@ pub enum ConnEvent {
     },
     Closed {
         error: Option<String>,
+        /// The connection was up and dropped without the shell exiting or the
+        /// user closing it, so reconnecting automatically makes sense.
+        lost: bool,
+        /// A network failure that trying again may fix, unlike a refused login.
+        retryable: bool,
     },
+}
+
+/// Marks errors from reaching the server at all, which are worth retrying.
+#[derive(Debug)]
+struct NetworkError(String);
+
+impl std::fmt::Display for NetworkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NetworkError {}
+
+/// How a connection that got as far as a shell ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Ended {
+    /// The shell exited or the user disconnected.
+    Closed,
+    /// The transport dropped; carries the error if there was one.
+    Lost(Option<String>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,6 +197,8 @@ enum ConnCmd {
     OpenSftp(oneshot::Sender<anyhow::Result<SftpSession>>),
     StartForward(Forward),
     StopForward(Uuid),
+    /// Checks the transport now, e.g. after the computer wakes from sleep.
+    Probe,
     Close,
 }
 
@@ -215,6 +243,13 @@ impl Ssh {
         self.send(id, ConnCmd::StopLog);
     }
 
+    /// Checks every connection's transport, e.g. after sleep or a network change.
+    pub fn probe_all(&self) {
+        for entry in self.conns.lock().unwrap().values() {
+            let _ = entry.cmds.send(ConnCmd::Probe);
+        }
+    }
+
     pub fn connect(self: &Arc<Self>, req: ConnectRequest, sinks: Sinks) -> u32 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::unbounded_channel();
@@ -235,8 +270,24 @@ impl Ssh {
         // remove it before it exists.
         let mut conns = self.conns.lock().unwrap();
         let task = tauri::async_runtime::spawn(async move {
-            let error = run(ctx, rx).await.err().map(|e| format!("{e:#}"));
-            sinks.event(ConnEvent::Closed { error });
+            let event = match run(ctx, rx).await {
+                Ok(Ended::Closed) => ConnEvent::Closed {
+                    error: None,
+                    lost: false,
+                    retryable: false,
+                },
+                Ok(Ended::Lost(error)) => ConnEvent::Closed {
+                    error: Some(error.unwrap_or_else(|| "The connection was lost".into())),
+                    lost: true,
+                    retryable: true,
+                },
+                Err(e) => ConnEvent::Closed {
+                    retryable: e.chain().any(|c| c.is::<NetworkError>()),
+                    error: Some(format!("{e:#}")),
+                    lost: false,
+                },
+            };
+            sinks.event(event);
             this.conns.lock().unwrap().remove(&id);
             this.sftp.lock().await.remove(&id);
             this.prompts
@@ -557,7 +608,8 @@ fn ssh_config() -> Arc<client::Config> {
         // No inactivity timeout: Tailscale check mode can hold the login for
         // as long as the user takes to approve in the browser.
         inactivity_timeout: None,
-        keepalive_interval: Some(Duration::from_secs(30)),
+        // A dead link is noticed within about 45 seconds.
+        keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 3,
         nodelay: true,
         ..Default::default()
@@ -570,7 +622,8 @@ async fn tcp_connect(host: &str, port: u16) -> anyhow::Result<tokio::net::TcpStr
         tokio::net::TcpStream::connect((host, port)),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("Timed out connecting to {host}:{port}"))??;
+    .map_err(|_| NetworkError(format!("Timed out connecting to {host}:{port}")))?
+    .map_err(|e| NetworkError(format!("Couldn't reach {host}:{port}: {e}")))?;
     stream.set_nodelay(true).ok();
     Ok(stream)
 }
@@ -612,7 +665,7 @@ where
     Ok(handle)
 }
 
-async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow::Result<()> {
+async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow::Result<Ended> {
     let req = ctx.req.clone();
     let remote: RemoteTargets = Arc::default();
 
@@ -678,7 +731,9 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
         tunnels.start(f.clone());
     }
 
-    loop {
+    // The shell said how it ended, so a close after this isn't a lost connection.
+    let mut exited = false;
+    let ended = loop {
         tokio::select! {
             msg = reader.wait() => match msg {
                 Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
@@ -687,15 +742,34 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
                     }
                     (ctx.sinks.output)(data.to_vec());
                 }
-                Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::Eof) => {}
-                Some(ChannelMsg::Close) | None => break,
+                Some(ChannelMsg::ExitStatus { .. }) | Some(ChannelMsg::ExitSignal { .. }) => exited = true,
+                Some(ChannelMsg::Eof) => {}
+                Some(ChannelMsg::Close) | None => {
+                    break if exited || !handle.is_closed() && msg.is_some() {
+                        Ended::Closed
+                    } else {
+                        Ended::Lost(None)
+                    };
+                }
                 Some(_) => {}
             },
             cmd = cmds.recv() => match cmd {
-                Some(ConnCmd::Input(data)) => writer.data_bytes(data).await?,
+                Some(ConnCmd::Input(data)) => {
+                    if let Err(e) = writer.data_bytes(data).await {
+                        break Ended::Lost(Some(format!("The connection was lost: {e}")));
+                    }
+                }
                 Some(ConnCmd::Resize(cols, rows)) => {
                     log.set_width(cols as usize);
-                    writer.window_change(cols, rows, 0, 0).await?
+                    if let Err(e) = writer.window_change(cols, rows, 0, 0).await {
+                        break Ended::Lost(Some(format!("The connection was lost: {e}")));
+                    }
+                }
+                Some(ConnCmd::Probe) => {
+                    // A dead transport fails this write, or the keepalive reply never comes.
+                    if handle.is_closed() || handle.send_keepalive(true).await.is_err() {
+                        break Ended::Lost(None);
+                    }
                 }
                 Some(ConnCmd::StartLog) => ctx.start_log(&mut log),
                 Some(ConnCmd::StopLog) => stop_log(&ctx, &mut log),
@@ -710,18 +784,18 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
                 }
                 Some(ConnCmd::Close) | None => {
                     let _ = writer.close().await;
-                    break;
+                    break Ended::Closed;
                 }
             },
         }
-    }
+    };
     stop_log(&ctx, &mut log);
     tunnels.stop_all();
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
     if let Some(jh) = jump_handle {
         let _ = jh.disconnect(Disconnect::ByApplication, "", "en").await;
     }
-    Ok(())
+    Ok(ended)
 }
 
 async fn open_sftp(handle: &client::Handle<Handler>) -> anyhow::Result<SftpSession> {
@@ -1060,7 +1134,7 @@ mod live {
                 }
                 Seen::Event(ConnEvent::Banner { links: l, .. }) => links.extend(l),
                 Seen::Event(ConnEvent::Connected) => return (kinds, links, None),
-                Seen::Event(ConnEvent::Closed { error }) => return (kinds, links, Some(error)),
+                Seen::Event(ConnEvent::Closed { error, .. }) => return (kinds, links, Some(error)),
                 _ => {}
             }
         }
@@ -1341,6 +1415,103 @@ mod live {
                 }
             }
         }
+    }
+
+    /// Waits for the connection to close and returns (error, lost, retryable).
+    async fn closed(rx: &mut UnboundedReceiver<Seen>) -> (Option<String>, bool, bool) {
+        loop {
+            let seen = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+                .await
+                .expect("timed out waiting for the close")
+                .expect("connection dropped its sinks");
+            if let Seen::Event(ConnEvent::Closed {
+                error,
+                lost,
+                retryable,
+            }) = seen
+            {
+                return (error, lost, retryable);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn lost_connections_are_told_apart_from_exits() {
+        let Some(env) = env() else {
+            eprintln!("GHOSTKEY_TEST_HOST not set; skipping live recovery tests");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(
+            dir.path().join("known_hosts"),
+            dir.path().join("logs"),
+        ));
+        let pw = env.password.clone();
+        let login = |p: &Prompt| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            Prompt::Password { .. } | Prompt::KeyboardInteractive { .. } => yes(&[&pw]),
+            other => panic!("unexpected prompt {other:?}"),
+        };
+
+        // 1. The shell exits: closed, not lost.
+        let (id, mut rx) = start(&ssh, &env, AuthMethod::Password, Arc::default());
+        assert_eq!(drive(&ssh, &mut rx, login).await.2, None, "login failed");
+        ssh.input(id, b"exit\n".to_vec());
+        let (error, lost, _) = closed(&mut rx).await;
+        assert_eq!((error, lost), (None, false));
+
+        // 2. The network drops under a live shell: lost, worth reconnecting.
+        //    A local relay stands in for the network and is cut mid-session.
+        let relay = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay_port = relay.local_addr().unwrap().port();
+        let target = (env.host.clone(), env.port);
+        let link = tokio::spawn(async move {
+            let (mut inbound, _) = relay.accept().await.unwrap();
+            let mut outbound = tokio::net::TcpStream::connect(target).await.unwrap();
+            let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+        });
+        let via = Env {
+            host: "127.0.0.1".into(),
+            port: relay_port,
+            user: env.user.clone(),
+            password: env.password.clone(),
+            key: env.key.clone(),
+            passphrase: env.passphrase.clone(),
+        };
+        let (id, mut rx) = start(&ssh, &via, AuthMethod::Password, Arc::default());
+        assert_eq!(drive(&ssh, &mut rx, login).await.2, None, "login failed");
+        ssh.input(id, b"echo GK_$((40+2))\n".to_vec());
+        expect_output(&mut rx, "GK_42").await;
+        link.abort();
+        let (error, lost, retryable) = closed(&mut rx).await;
+        assert!(lost && retryable, "{error:?}");
+        assert!(error.is_some());
+
+        // 3. Nothing listening: a network failure, worth retrying, but never connected.
+        let nowhere = Env {
+            port: free_port(),
+            ..via
+        };
+        let (_, mut rx) = start(&ssh, &nowhere, AuthMethod::Password, Arc::default());
+        let (error, lost, retryable) = closed(&mut rx).await;
+        assert!(!lost && retryable, "{error:?}");
+
+        // 4. A refused login is not worth retrying.
+        let (_, mut rx) = start(&ssh, &env, AuthMethod::Password, Arc::default());
+        let mut tries = 0;
+        let (_, _, failed) = drive(&ssh, &mut rx, |p| match p {
+            Prompt::Password { .. } | Prompt::KeyboardInteractive { .. } if tries < 3 => {
+                tries += 1;
+                yes(&["wrong"])
+            }
+            _ => PromptAnswer {
+                accept: false,
+                values: Vec::new(),
+                save: false,
+            },
+        })
+        .await;
+        assert!(failed.is_some());
     }
 
     fn free_port() -> u16 {

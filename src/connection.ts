@@ -30,7 +30,14 @@ export interface ConnHooks {
   closePrompts(): void;
   /** Title, status, or log state changed. */
   changed(): void;
+  /** Whether to reconnect on its own after the connection drops. Off when not given. */
+  autoReconnect?(): boolean;
+  /** Runs `fn` after `ms` and returns a function that cancels it. Defaults to setTimeout. */
+  schedule?(fn: () => void, ms: number): () => void;
 }
+
+/** Seconds to wait before each automatic reconnect attempt. */
+export const RECONNECT_DELAYS = [2, 4, 8, 16, 30];
 
 // ANSI helpers in Kali-Dark colors, for GhostKey's own messages in the terminal.
 export const ansi = {
@@ -54,15 +61,23 @@ export class Connection {
   /** This connection's tunnels, as the backend last reported them. */
   tunnels: TunnelStatus[] = [];
   private gen = 0;
+  /** While reconnecting on its own: the attempt being waited for or made (1-based), else 0. */
+  private attempt = 0;
+  private cancelWait: (() => void) | null = null;
 
   constructor(
     private api: ConnApi,
     private hooks: ConnHooks,
   ) {}
 
-  /** Connecting or connected. */
+  /** Waiting to reconnect after the connection dropped. */
+  get recovering() {
+    return this.cancelWait !== null;
+  }
+
+  /** Connecting, connected, or waiting to reconnect. */
   get active() {
-    return this.request !== null && !this.closed;
+    return this.request !== null && (!this.closed || this.recovering);
   }
 
   get canRetry() {
@@ -70,11 +85,12 @@ export class Connection {
   }
 
   get retryLabel() {
+    if (this.recovering) return "Reconnect now";
     return this.connected ? "Reconnect" : "Retry connection";
   }
 
   get stopLabel() {
-    return this.connected ? "Disconnect" : "Cancel";
+    return this.connected && !this.closed ? "Disconnect" : "Cancel";
   }
 
   get online() {
@@ -89,6 +105,13 @@ export class Connection {
 
   async connect(req: BaseRequest, title: string) {
     if (this.active) this.disconnect();
+    this.attempt = 0;
+    await this.open(req, title);
+  }
+
+  /** Starts one connection attempt. `resume` keeps the terminal's text, for automatic reconnects. */
+  private async open(req: BaseRequest, title: string, resume = false) {
+    this.stopWaiting();
     const myGen = ++this.gen;
     const current = () => this.gen === myGen && !this.closed;
     this.request = { ...req };
@@ -98,9 +121,10 @@ export class Connection {
     this.closed = false;
     this.logPath = null;
     this.tunnels = [];
-    this.hooks.reset();
+    if (resume) this.hooks.writeln(ansi.dim(`Reconnecting (try ${this.attempt} of ${RECONNECT_DELAYS.length})…`));
+    else this.hooks.reset();
     this.hooks.hideBanner();
-    this.set("busy", "Connecting…");
+    this.set("busy", resume ? "Reconnecting…" : "Connecting…");
     this.hooks.focus();
 
     const { cols, rows } = this.hooks.size();
@@ -126,12 +150,50 @@ export class Connection {
       this.hooks.hideBanner();
       this.hooks.writeln(ansi.err(`Couldn't start the connection: ${e}`));
       this.closed = true;
-      this.set("error", "Failed");
+      if (this.attempt > 0) this.retryLater();
+      else this.set("error", "Failed");
     }
+  }
+
+  private stopWaiting() {
+    this.cancelWait?.();
+    this.cancelWait = null;
+  }
+
+  /** Waits, then makes the next automatic attempt, or gives up after the last one. */
+  private retryLater() {
+    if (!this.request) return;
+    if (this.attempt >= RECONNECT_DELAYS.length) {
+      this.attempt = 0;
+      this.hooks.writeln(ansi.err(`Gave up reconnecting after ${RECONNECT_DELAYS.length} tries. Press Reconnect to try again.`));
+      this.set("error", "Couldn't reconnect");
+      return;
+    }
+    this.attempt++;
+    const delay = RECONNECT_DELAYS[this.attempt - 1];
+    const req = this.request;
+    const title = this.title;
+    const schedule = this.hooks.schedule ?? ((fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms);
+      return () => clearTimeout(t);
+    });
+    this.cancelWait = schedule(() => {
+      this.cancelWait = null;
+      void this.open(req, title, true);
+    }, delay * 1000);
+    this.set("busy", `Connection lost. Reconnecting in ${delay} s (try ${this.attempt} of ${RECONNECT_DELAYS.length})`);
   }
 
   disconnect() {
     if (!this.active) return;
+    if (this.recovering) {
+      this.stopWaiting();
+      this.attempt = 0;
+      this.hooks.writeln(ansi.dim("Stopped reconnecting."));
+      this.set("idle", "Disconnected");
+      return;
+    }
+    this.attempt = 0;
     this.closed = true;
     if (this.id !== null) this.api.disconnect(this.id);
     this.logPath = null;
@@ -143,7 +205,10 @@ export class Connection {
   }
 
   retry() {
-    if (this.canRetry && this.request) this.connect(this.request, this.title);
+    if (!this.canRetry || !this.request) return;
+    // "Reconnect now" skips the wait but keeps counting tries.
+    if (this.recovering) void this.open(this.request, this.title, true);
+    else void this.connect(this.request, this.title);
   }
 
   input(data: string) {
@@ -182,6 +247,8 @@ export class Connection {
       case "connected":
         this.connected = true;
         this.hooks.hideBanner();
+        if (this.attempt > 0) this.hooks.writeln(ansi.ok("Reconnected. This is a new shell; programs from the old one are gone."));
+        this.attempt = 0;
         this.set("online", "Connected");
         this.hooks.fit();
         this.sendSize();
@@ -202,9 +269,21 @@ export class Connection {
         this.tunnels = [];
         this.hooks.closePrompts();
         this.hooks.hideBanner();
-        if (e.error) {
+        if (e.lost && this.hooks.autoReconnect?.()) {
+          this.hooks.writeln(`\r\n${ansi.err(e.error ?? "The connection was lost.")}`);
+          this.attempt = 0;
+          this.retryLater();
+        } else if (this.attempt > 0) {
+          this.hooks.writeln(ansi.err(e.error ?? "The connection closed."));
+          if (e.retryable) this.retryLater();
+          else {
+            // A refused or cancelled login won't fix itself by trying again.
+            this.attempt = 0;
+            this.set("error", "Couldn't reconnect");
+          }
+        } else if (e.error) {
           this.hooks.writeln(`\r\n${ansi.err(e.error)}`);
-          this.set("error", "Connection closed with an error");
+          this.set("error", e.lost ? "Connection lost" : "Connection closed with an error");
         } else {
           this.hooks.writeln(`\r\n${ansi.dim("Connection closed.")}`);
           this.set("idle", "Disconnected");

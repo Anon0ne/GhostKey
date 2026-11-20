@@ -74,6 +74,7 @@ const host: PaneHost = {
   fontSize: () => prefs.fontSize,
   termOptions,
   copyOnSelect: () => prefs.copyOnSelect,
+  autoReconnect: () => prefs.autoReconnect,
   activate: (pane) => focusPane(pane, false),
   changed: (pane) => {
     renderTabs();
@@ -719,6 +720,7 @@ async function openSettings() {
   const [barRow, bar] = checkbox("Show the snippet bar", prefs.showSnippetBar);
   const user = el("input", { value: prefs.defaultUser, placeholder: "e.g. kali", spellcheck: "false" });
   const port = el("input", { type: "number", min: "1", max: "65535", value: String(prefs.defaultPort) });
+  const [reconnectRow, reconnect] = checkbox("Reconnect on its own when a connection drops", prefs.autoReconnect);
 
   const read = (): Prefs =>
     normalizePrefs(
@@ -735,6 +737,7 @@ async function openSettings() {
         showSnippetBar: bar.checked,
         defaultUser: user.value,
         defaultPort: Number(port.value),
+        autoReconnect: reconnect.checked,
       },
       THEME_IDS,
     );
@@ -770,7 +773,13 @@ async function openSettings() {
         section("Appearance", field("Theme", theme), field("Font", font, "Fonts other than Fira Code are used when installed."), field("Font size", size, "Ctrl+= and Ctrl+- also change it.")),
         section("Terminal", field("Cursor", cursor), blinkRow, field("Scrollback lines", scrollback, "Lines kept per terminal for scrolling and Find."), copyRow),
         section("Window", sidebarRow, barRow),
-        section("New connections", field("Default user", user, "Quick connect uses it when the address has no user@."), field("Default port", port)),
+        section(
+          "Connections",
+          field("Default user", user, "Quick connect uses it when the address has no user@."),
+          field("Default port", port),
+          reconnectRow,
+          el("small", { class: "hint", text: "Tries 5 times over about a minute, after sleep or a network change. Each reconnect starts a new shell." }),
+        ),
       ),
       section(
         "Session logs",
@@ -1207,6 +1216,19 @@ const menus: Menu[] = [
   },
 ];
 const menuBar = new MenuBar($("menubar"), menus);
+
+// ---------------------------------------------------------------- network recovery
+
+// After sleep or a network change, check every connection at once instead of
+// waiting for keepalives to notice a dead link. A long gap between timer ticks
+// means the computer was asleep.
+let lastTick = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastTick > 20_000) void api.probeConnections().catch(() => {});
+  lastTick = now;
+}, 5_000);
+window.addEventListener("online", () => void api.probeConnections().catch(() => {}));
 
 // ---------------------------------------------------------------- wiring
 
