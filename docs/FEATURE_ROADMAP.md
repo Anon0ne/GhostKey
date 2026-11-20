@@ -31,28 +31,28 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 
 | ID | Feature | Status | Owner/session | Branch / PR | Next step |
 | --- | --- | --- | --- | --- | --- |
-| F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
+| F01 | Tabs and split panes | Done | Claude | #6, #25 (merged) | Moving panes between tabs added in #25 |
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
-| F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
-| F04 | Port forwarding and jump hosts | Done | Claude | #13 (merged) | Follow-up: multi-hop jumps; import ProxyJump and *Forward from ~/.ssh/config |
-| F05 | SSH agent and key manager | In progress | Claude | `ssh-keys` | Agent login (ssh-agent, Windows OpenSSH agent, Pageant), key inspect/generate/convert; awaiting review |
-| F06 | Broadcast input | In progress | Claude | `broadcast` | Chosen panes across tabs, bar and outlines, multi-destination paste/snippet review; awaiting review |
+| F03 | SFTP file browser | Done | Claude | #10, #25 (merged) | Folder transfers added in #25; check drag and drop on desktops |
+| F04 | Port forwarding and jump hosts | Done | Claude | #13, #25 (merged) | Multi-hop added in #25; follow-up: import ProxyJump and *Forward from ~/.ssh/config |
+| F05 | SSH agent and key manager | Done | Claude | #22 (merged) | Pageant and the Windows agent need a Windows test |
+| F06 | Broadcast input | Done | Claude | #20 (merged) | — |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
-| F09 | Connection diagnostics | In progress | Claude | `diagnostics` | Stage events, failure advice, redacted copyable report; awaiting review |
-| F10 | Network recovery | In progress | Claude | `network-recovery` | Auto-reconnect with backoff, wake and network-change probes; awaiting review |
-| F11 | tmux integration | In progress | Claude | `tmux-bookmarks` | Per-session tmux name (attach or create), server session list, never kills; awaiting review |
-| F12 | Workspace layouts | In progress | Claude | `profiles-workspaces` | Save/open tabs and splits by name; opening connects only ticked panes; awaiting review |
-| F13 | Host identity guardrails | In progress | Claude | `session-tags` | Environment badges in list/tab/toolbar, production warnings in snippets, paste and broadcast; awaiting review |
-| F14 | Searchable terminal history | In progress | Codex | `feature/paste-and-history` | Per-pane in-memory search implemented; review pending; persistent/all-pane history deferred |
-| F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
-| F16 | Evidence bookmarks | In progress | Claude | `tmux-bookmarks` | Selection + note + source + time, immutable original with redacted copy, Markdown/JSON export; awaiting review |
-| F17 | Portable session profiles | In progress | Claude | `profiles-workspaces` | Versioned JSON (`ghostkey-profile` v1) of sessions, snippets, workspaces; no secrets; awaiting review |
-| F18 | Local terminal tabs | In review | Claude | `local-serial` | Windows ConPTY untested here (no Windows box) |
-| F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
-| F20 | Session tags | In progress | Claude | `session-tags` | Tags beside folders, searchable with #tag; awaiting review |
-| F21 | Auto-update | In review | Claude | `auto-update` | In-place install waits for Justin's signing key and secrets (README) |
-| F22 | Serial and Telnet connections | In review | Claude | `local-serial` | Tested with a PTY standing in for a device; needs a real USB console cable |
+| F09 | Connection diagnostics | Done | Claude | #21 (merged) | — |
+| F10 | Network recovery | Done | Claude | #19 (merged) | — |
+| F11 | tmux integration | Done | Claude | #26 (merged) | — |
+| F12 | Workspace layouts | Done | Claude | #24 (merged) | — |
+| F13 | Host identity guardrails | Done | Claude | #23 (merged) | — |
+| F14 | Searchable terminal history | Done | Codex | #8 (merged) | Per-pane in-memory search; persistent/all-pane history deferred |
+| F15 | Safe paste preview | Done | Codex | #8, #16 (merged) | Snippet and broadcast reviews share it |
+| F16 | Evidence bookmarks | Done | Claude | #26 (merged) | — |
+| F17 | Portable session profiles | Done | Claude | #24 (merged) | — |
+| F18 | Local terminal tabs | Done | Claude | #27 (merged) | Windows ConPTY untested here (no Windows box) |
+| F19 | Menu bar and Settings | Done | Claude | #18 (merged) | — |
+| F20 | Session tags | Done | Claude | #23 (merged) | — |
+| F21 | Auto-update | In review | Claude | #28 | In-place install waits for Justin's signing key and secrets (README) |
+| F22 | Serial and Telnet connections | Done | Claude | #27 (merged) | Tested with a PTY standing in for a device; needs a real USB console cable |
 
 ## Feature definitions and acceptance criteria
 
@@ -554,3 +554,12 @@ Copy this block into a dated entry below when starting or stopping work:
     `TAURI_SIGNING_PRIVATE_KEY` secret exists, so releases build without it. To finish: Justin
     generates the key pair (README, "Signed updates"), commits the public key and adds the
     two secrets. Ignored live test `github_lists_this_repositorys_releases`.
+  - Beta prep on `beta-prep` (stacked on `auto-update`): version 0.3.0 in package.json,
+    Cargo.toml and tauri.conf.json, "beta" badge and welcome line, README and SPEC say beta,
+    `docs/BETA_TESTING.md` is Justin's checklist (items marked untested need Windows or real
+    hardware), and the release body points to it. The version is plain `0.3.0`, not
+    `0.3.0-beta.1`, because the MSI bundler only accepts numeric pre-release identifiers; the
+    release is still published as a GitHub pre-release. Codex/GPT: once #28 and the beta-prep
+    PR are merged, tag `v0.3.0` on main to build the beta. If the signing key secrets are set
+    by then, the release also gets `latest.json` for in-place updates; otherwise it builds as
+    before.

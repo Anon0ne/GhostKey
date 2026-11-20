@@ -4,9 +4,9 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 
 ![GhostKey with two panes side by side, one of them logging](docs/screenshots/split-panes.png)
 
-> **Status: alpha.** It works for everyday logins, but expect rough edges. Please report anything odd.
+> **Status: beta (0.3.0).** Everything planned for 1.0 is in, and it needs testing on real servers and devices. Please report anything odd. [docs/BETA_TESTING.md](docs/BETA_TESTING.md) lists what to try.
 
-## What's in the alpha
+## What's in the beta
 
 - **Kali look:** Kali-Dark colors and Fira Code, taken from Kali's own QTerminal settings. Folder and file colors from `ls` and the bold `user@host` prompt look the same as on Kali.
 - **Login:** password, keyboard-interactive, and private keys (OpenSSH or PuTTY `.ppk`, with or without a passphrase).
@@ -60,7 +60,7 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 | --- | --- | --- |
 | ![Two local shells side by side](docs/screenshots/local-terminal.png) | ![Choosing a serial port, speed and line settings](docs/screenshots/serial-editor.png) | ![Talking to a device over a serial port](docs/screenshots/serial.png) |
 
-## Install the alpha
+## Install the beta
 
 Every push builds installers in GitHub Actions. Open the latest **CI** run on the [Actions tab](../../actions), scroll down to **Artifacts**, and download:
 
@@ -69,7 +69,7 @@ Every push builds installers in GitHub Actions. Open the latest **CI** run on th
 
 The Windows installers aren't code-signed yet, so SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
-Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the [Releases page](../../releases).
+Tagged releases (`v0.3.0` and so on) are published as draft pre-releases on the [Releases page](../../releases).
 
 ### Signed updates (for maintainers)
 

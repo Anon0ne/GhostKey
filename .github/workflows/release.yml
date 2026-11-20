@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.1.0-alpha.1 to build installers and create a draft
+# Push a tag like v0.3.0 to build installers and create a draft
 # pre-release on GitHub with them attached.
 on:
   push:
@@ -63,6 +63,6 @@ jobs:
           args: ${{ steps.signing.outputs.args }}
           tagName: ${{ github.ref_name }}
           releaseName: GhostKey ${{ github.ref_name }}
-          releaseBody: Alpha build for testing. See SPEC.md for what's included.
+          releaseBody: Beta build for testing. See README.md for what's included and docs/BETA_TESTING.md for what to try.
           releaseDraft: true
           prerelease: true

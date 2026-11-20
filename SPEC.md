@@ -145,3 +145,4 @@ The ⇩ button scans `~/.ssh/config` and PuTTY's saved sessions (the registry on
 2. Alpha: Kali-themed terminal, login by password, key or keyboard-interactive, host-key checks, Tailscale sign-in links, and saved sessions.
 3. Testing against real servers, then the first packaged release.
 4. v0.2: tabs, split panes and session logging.
+5. v0.3 beta: everything in docs/FEATURE_ROADMAP.md, including local, Telnet and serial terminals and update checks, ready for wider testing.
