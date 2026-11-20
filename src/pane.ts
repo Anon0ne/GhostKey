@@ -21,6 +21,12 @@ export interface PaneHost {
   copyOnSelect?(): boolean;
   /** Reconnect on its own when the connection drops. */
   autoReconnect?(): boolean;
+  /** Sends what was typed in `pane`, to every broadcast pane when it is one of them. */
+  input?(pane: Pane, data: string): void;
+  /** The panes that input typed in `pane` reaches, itself included. */
+  destinations?(pane: Pane): Pane[];
+  /** A name for `pane` that tells it apart from others on the same host. */
+  label?(pane: Pane): string;
   /** The pane wants focus, e.g. to show a login prompt. */
   activate(pane: Pane): void;
   changed(pane: Pane): void;
@@ -142,7 +148,7 @@ export class Pane {
       autoReconnect: () => host.autoReconnect?.() ?? false,
     });
 
-    this.term.onData((data) => this.conn.input(data));
+    this.term.onData((data) => this.send(data));
     this.term.onSelectionChange?.(() => {
       if (host.copyOnSelect?.() && this.term.hasSelection()) void Promise.resolve(writeText(this.term.getSelection())).catch(() => {});
     });
@@ -230,9 +236,25 @@ export class Pane {
     if (this.disposed || !this.conn.online || this.conn.id !== bound.id || this.conn.request !== bound.request) return false;
     // paste() turns newlines into Enter and uses bracketed paste when the shell asks for it.
     this.term.paste(text);
-    if (enter) this.conn.input("\r");
+    if (enter) this.send("\r");
     this.focus();
     return true;
+  }
+
+  /** Input from this pane: its own connection, or every broadcast pane. */
+  private send(data: string) {
+    if (this.host.input) this.host.input(this, data);
+    else this.conn.input(data);
+  }
+
+  /** Where input typed here goes, this pane included. */
+  destinations(): Pane[] {
+    return this.host.destinations?.(this) ?? [this];
+  }
+
+  /** Marks the pane as one that broadcast input reaches. */
+  setBroadcast(on: boolean) {
+    this.el.classList.toggle("broadcast", on);
   }
 
   /** All programmatic pastes (including future snippets) must use this entry point. */
@@ -240,21 +262,26 @@ export class Pane {
     if (!text || this.disposed || !this.conn.online || this.pastePending) return;
     const request = this.conn.request!;
     const id = this.conn.id;
+    const targets = this.destinations();
+    const where = (p: Pane) => this.host.label?.(p) ?? `${p.conn.request?.username}@${p.conn.request?.host}:${p.conn.request?.port} (${p.title})`;
     this.pastePending = true;
     try {
-      if (needsPastePreview(text)) {
+      // Pasting into several servers at once always gets a second look.
+      if (needsPastePreview(text) || targets.length > 1) {
         const modal = showModal<boolean>({
-          title: "Review terminal paste",
+          title: targets.length > 1 ? `Review paste to ${targets.length} terminals` : "Review terminal paste",
           wide: true,
           body: [
-            el("p", { text: `Destination: ${request.username}@${request.host}:${request.port} (${this.title})` }),
+            targets.length > 1
+              ? el("div", { class: "paste-targets" }, el("p", { text: "Broadcast is on. This goes to every one of:" }), el("ul", {}, ...targets.map((p) => el("li", { text: where(p) }))))
+              : el("p", { text: `Destination: ${request.username}@${request.host}:${request.port} (${this.title})` }),
             el("p", { text: `${pasteLineCount(text)} lines. Newlines or control characters may execute commands immediately. Control characters other than line feed are shown as Unicode escapes.` }),
             el("pre", { class: "paste-preview", text: pastePreview(text) }),
           ],
           // Enter dismisses safely instead of approving a dangerous paste by accident.
           buttons: [
             { label: "Cancel", value: () => false, primary: true },
-            { label: "Paste to this terminal", value: () => true },
+            { label: targets.length > 1 ? `Paste to all ${targets.length}` : "Paste to this terminal", value: () => true },
           ],
           onDismiss: () => false,
         });
@@ -263,8 +290,10 @@ export class Pane {
         this.openPrompts.delete(modal.close);
         if (!approved) return;
       }
-      // Focus changes cannot redirect this paste; reconnects invalidate approval.
-      if (!this.disposed && this.conn.online && this.conn.id === id && this.conn.request === request) {
+      // Focus changes cannot redirect this paste; reconnects or a changed
+      // broadcast group invalidate approval.
+      const same = (a: Pane[], b: Pane[]) => a.length === b.length && a.every((p) => b.includes(p));
+      if (!this.disposed && this.conn.online && this.conn.id === id && this.conn.request === request && same(targets, this.destinations())) {
         this.term.paste(text);
       }
     } finally {

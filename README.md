@@ -20,6 +20,7 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **Tunnels and jump hosts (new):** save port forwards with a session: local (`-L`), remote (`-R`), and SOCKS proxies (`-D`). You can type them the OpenSSH way, such as `-L 8080:db:5432`. They start when the session connects, listen on 127.0.0.1 unless you explicitly allow other computers, and stop when it disconnects. **Tunnels** in the toolbar shows each tunnel's address, open connections and errors (such as a port already in use), and lets you stop, retry, or add a temporary one. A session can also connect through another saved session as a jump host, like `ssh -J`. Each server's host key is checked and each asks for its own login.
 - **Session logging (new in 0.2):** save what a session prints to a timestamped text file, with colors removed. Start and stop it from the toolbar, or set a saved session to log automatically. Choose the folder in Settings.
 - **Reconnects on its own (new):** when a connection drops (Wi-Fi changes, the server reboots, the computer wakes from sleep), GhostKey says so in the terminal and tries again after 2, 4, 8, 16 and 30 seconds. The toolbar shows the countdown with **Reconnect now** and **Cancel**. It asks for a password again if one isn't saved, gives up on a refused login, and never reconnects after you type `exit` or press Disconnect. Saved tunnels set to start on connect come back with it. Each reconnect is a new shell, so programs from the old one are gone. Turn it off in Settings.
+- **Broadcast input (new):** type into several terminals at once, across tabs. Choose them in **Session → Broadcast input…** or with Ctrl+Shift+I. A yellow bar lists every terminal in the group and each one gets an outline. Pastes and snippets show every destination before anything is sent. A terminal that disconnects or reconnects leaves the group, so a new connection never joins without being chosen, and login prompts are never broadcast.
 - **Menu bar and Settings (new):** File, Edit, View, Session and Help menus across the top, like a normal desktop program. **File → Settings** (Ctrl+,) picks the theme (Kali Dark, Kali Light, Dracula, Solarized Dark, High contrast), font and size, cursor, scrollback, copy on select, a default user and port for Quick connect, and the log folder. Changes show as you make them, and Cancel puts them back. **View** hides the session list (Ctrl+Shift+B) or the snippet bar.
 
 | Tailscale sign-in | New host key | Session editor |
@@ -34,9 +35,9 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 | --- | --- | --- |
 | ![Live tunnels with one port already in use](docs/screenshots/tunnels.png) | ![Settings](docs/screenshots/settings.png) | ![File menu](docs/screenshots/menu-bar.png) |
 
-| Reconnecting |
-| --- |
-| ![Reconnecting after the connection dropped](docs/screenshots/reconnect.png) |
+| Reconnecting | Broadcast input |
+| --- | --- |
+| ![Reconnecting after the connection dropped](docs/screenshots/reconnect.png) | ![One command typed into two terminals](docs/screenshots/broadcast.png) |
 
 ## Install the alpha
 
@@ -65,6 +66,7 @@ Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the 
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
 | Right-click | Copy the selection, or paste when nothing is selected |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Bigger / smaller / default font size |
+| Ctrl+Shift+I | Choose terminals to broadcast to, or stop broadcasting |
 | Ctrl+Shift+B | Show or hide the session list |
 | Ctrl+, | Settings |
 | F10 | Open the menu bar (when focus isn't in the terminal, since htop and mc use F10) |

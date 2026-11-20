@@ -36,7 +36,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
 | F04 | Port forwarding and jump hosts | Done | Claude | #13 (merged) | Follow-up: multi-hop jumps; import ProxyJump and *Forward from ~/.ssh/config |
 | F05 | SSH agent and key manager | Planned | Claude (beta queue) | — | Not started |
-| F06 | Broadcast input | Planned | Claude (beta queue, 3rd) | — | Not started |
+| F06 | Broadcast input | In progress | Claude | `broadcast` | Chosen panes across tabs, bar and outlines, multi-destination paste/snippet review; awaiting review |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
 | F09 | Connection diagnostics | Planned | Claude (beta queue) | — | Define connection stages and redacted diagnostics |
@@ -443,3 +443,11 @@ Copy this block into a dated entry below when starting or stopping work:
     keepalive on every connection so dead links close at once; keepalive is now every 15 s.
     Saved auto-start tunnels return because the original request is reused; temporary ones
     don't. Setting: "Reconnect on its own" (on by default).
+  - F06 on `broadcast` (stacked on `network-recovery`): `src/broadcast.ts` keeps the chosen
+    panes, each tied to the connection id it had when chosen, so a pane that drops or
+    reconnects leaves the group and a new connection never joins on its own. Pane keyboard
+    input goes through `PaneHost.input`, which fans out to the group; login prompts are modal
+    dialogs and are never broadcast. Paste review and snippet preview list every destination
+    ("Tab 1, pane 2: …") and cancel if the group changed while open. Ctrl+Shift+I and
+    Session → Broadcast input… choose panes; the yellow bar has Change… and Stop. F13 should
+    add its production warning to the same destination list.
