@@ -5,7 +5,7 @@ import { load } from './load.mjs';
 const layout = load('layout.ts');
 const hostLabels = load('hostLabels.ts');
 const ws = load('workspace.ts', { './layout': layout });
-const p = load('profile.ts', { './workspace': ws, './hostLabels': hostLabels });
+const p = load('profile.ts', { './workspace': ws, './hostLabels': hostLabels, './protocols': load('protocols.ts') });
 
 const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const session = (n, extra = {}) => ({

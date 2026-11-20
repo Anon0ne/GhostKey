@@ -25,6 +25,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
 import { jumpChain, jumpChoices, routeText } from "./jumps";
 import { describeTmux, tmuxNameProblem } from "./tmux";
+import { BAUD_RATES, DEFAULT_SERIAL, describeTarget, hasSshFeatures, PROTOCOLS, protocolOf, serialProblem, TELNET_WARNING, type Flow, type Parity, type Protocol, type SerialSettings } from "./protocols";
 import { suggestRedaction, toJson, toMarkdown, NOT_FORENSIC, type Bookmark } from "./bookmarks";
 import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } from "./workspace";
 import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
@@ -196,7 +197,10 @@ function splitPane(dir: Dir) {
   renderLayout(tab);
   focusPane(pane);
   // A split opens another shell on the same server, like QTerminal and SecureCRT.
-  if (from.conn.request) {
+  if (from.conn.request && protocolOf(from.conn.request) === "serial") {
+    // A serial port can only be open once, so the new pane starts empty.
+    pane.welcome();
+  } else if (from.conn.request) {
     const req = from.conn.request;
     // The new shell shares the server but not the tunnels, whose ports are taken.
     requestAnimationFrame(() => pane.conn.connect({ ...req, log: false, forwards: [], tmux: null }, from.conn.title));
@@ -315,6 +319,28 @@ function moveFocus(dir: Direction) {
   if (next !== null) focusPane(all[next]);
 }
 
+/** Opens a shell on this computer, using the program chosen in Settings. */
+function openLocal() {
+  const req: BaseRequest = {
+    sessionId: null,
+    host: "",
+    port: 0,
+    username: "",
+    auth: "password",
+    keyPath: null,
+    autoOpenTailscale: false,
+    log: false,
+    label: "local",
+    forwards: [],
+    jumps: [],
+    tmux: null,
+    protocol: "local",
+    shell: prefs.localShell || null,
+    serial: null,
+  };
+  openSession(req, "Local shell");
+}
+
 /** Opens a session in the active pane when it is free, otherwise in a new tab. */
 function openSession(req: BaseRequest, title: string) {
   const pane = activePane().conn.active ? newTab() : activePane();
@@ -377,9 +403,12 @@ function renderToolbar() {
   rec.hidden = !conn.logPath;
   rec.title = conn.logPath ? `Logging to ${conn.logPath}` : "";
   for (const b of document.querySelectorAll<HTMLButtonElement>("#snippet-favorites button")) b.disabled = !conn.online;
-  $("files-toggle").setAttribute("aria-pressed", String(activePane().filesOpen));
+  const ssh = !conn.request || hasSshFeatures(conn.request);
+  const files = $("files-toggle");
+  files.setAttribute("aria-pressed", String(activePane().filesOpen));
+  files.hidden = !ssh && !activePane().filesOpen;
   const tunnels = $<HTMLButtonElement>("tunnels");
-  tunnels.hidden = !conn.online;
+  tunnels.hidden = !conn.online || !ssh;
   const failed = conn.tunnels.some((t) => t.state === "failed");
   tunnels.textContent = conn.tunnels.length ? `Tunnels (${conn.tunnels.length})` : "Tunnels";
   tunnels.classList.toggle("warn", failed);
@@ -413,6 +442,9 @@ function shortcut(e: KeyboardEvent): boolean {
         return true;
       case "KeyT":
         newTab();
+        return true;
+      case "KeyN":
+        openLocal();
         return true;
       case "KeyW":
         closePane(activePane());
@@ -636,7 +668,7 @@ function badgeEl(env: Environment): HTMLElement | null {
 function destination(pane: Pane): string {
   const r = pane.conn.request;
   if (!r) return pane.title;
-  return `${pane.conn.title} (${r.username}@${r.host}${r.port === 22 ? "" : `:${r.port}`})`;
+  return `${pane.conn.title} (${describeTarget(r)})`;
 }
 
 /** Names a pane by its tab and position too, so two panes on one host can be told apart. */
@@ -847,6 +879,7 @@ async function openSettings() {
   const user = el("input", { value: prefs.defaultUser, placeholder: "e.g. kali", spellcheck: "false" });
   const port = el("input", { type: "number", min: "1", max: "65535", value: String(prefs.defaultPort) });
   const [reconnectRow, reconnect] = checkbox("Reconnect on its own when a connection drops", prefs.autoReconnect);
+  const localShell = el("input", { value: prefs.localShell, placeholder: navigator.userAgent.includes("Windows") ? "powershell.exe (default)" : "Your login shell (default)", spellcheck: "false" });
 
   const read = (): Prefs =>
     normalizePrefs(
@@ -864,6 +897,7 @@ async function openSettings() {
         defaultUser: user.value,
         defaultPort: Number(port.value),
         autoReconnect: reconnect.checked,
+        localShell: localShell.value,
       },
       THEME_IDS,
     );
@@ -897,7 +931,7 @@ async function openSettings() {
         "div",
         { class: "settings-grid" },
         section("Appearance", field("Theme", theme), field("Font", font, "Fonts other than Fira Code are used when installed."), field("Font size", size, "Ctrl+= and Ctrl+- also change it.")),
-        section("Terminal", field("Cursor", cursor), blinkRow, field("Scrollback lines", scrollback, "Lines kept per terminal for scrolling and Find."), copyRow),
+        section("Terminal", field("Cursor", cursor), blinkRow, field("Scrollback lines", scrollback, "Lines kept per terminal for scrolling and Find."), copyRow, field("Local shell", localShell, "The program File → New local terminal runs, e.g. pwsh, cmd.exe, wsl.exe or /bin/zsh, without arguments. Leave empty for the default.")),
         section("Window", sidebarRow, barRow),
         section(
           "Connections",
@@ -1012,7 +1046,7 @@ function sessionRow(s: SavedSession): HTMLElement {
       "div",
       { class: "session-text" },
       el("span", { class: "session-name" }, badgeEl(s.environment), el("span", { text: s.name })),
-      el("span", { class: "session-host", text: `${s.username}@${s.host}${s.port === 22 ? "" : `:${s.port}`}` }),
+      el("span", { class: "session-host", text: describeTarget(s) }),
       s.tags.length ? el("span", { class: "session-tags" }, ...s.tags.map((t) => el("span", { class: "tag", text: `#${t}` }))) : null,
     ),
     el("div", { class: "row-actions" }, connectBtn, editBtn, delBtn),
@@ -1041,7 +1075,7 @@ function sessionRow(s: SavedSession): HTMLElement {
 }
 
 function connectSaved(s: SavedSession) {
-  const chain = jumpChain(s, sessions);
+  const chain = protocolOf(s) === "ssh" ? jumpChain(s, sessions) : { ok: true as const };
   if (!chain.ok) {
     void confirm("Can't reach this session", chain.error, "OK");
     return;
@@ -1052,7 +1086,8 @@ function connectSaved(s: SavedSession) {
 
 /** The connection settings for a saved session, or null when its jump hosts can't be used. */
 function requestFor(s: SavedSession): BaseRequest | null {
-  const chain = jumpChain(s, sessions);
+  const protocol = protocolOf(s);
+  const chain = protocol === "ssh" ? jumpChain(s, sessions) : { ok: true as const, hops: [] };
   if (!chain.ok) return null;
   const jumps = chain.hops.map((j) => ({ sessionId: j.id, host: j.host, port: j.port, username: j.username, auth: j.auth, keyPath: j.keyPath }));
   return (
@@ -1068,7 +1103,9 @@ function requestFor(s: SavedSession): BaseRequest | null {
       label: s.name,
       forwards: s.forwards ?? [],
       jumps,
-      tmux: s.tmux || null,
+      tmux: protocol === "ssh" ? s.tmux || null : null,
+      protocol,
+      serial: protocol === "serial" ? (s.serial ?? null) : null,
     }
   );
 }
@@ -1091,7 +1128,53 @@ async function editSession(existing?: Partial<SavedSession>) {
     tags: existing?.tags ?? [],
     environment: existing?.environment ?? "",
     tmux: existing?.tmux ?? "",
+    protocol: existing?.protocol ?? "ssh",
+    serial: existing?.serial ?? null,
   };
+
+  const protocol = select(PROTOCOLS.map((p) => ({ label: p.label, value: p.value })), protocolOf(s) as Exclude<Protocol, "local">);
+  const ser: SerialSettings = { ...DEFAULT_SERIAL, ...(s.serial ?? {}) };
+  const serialPath = el("input", { value: ser.path, placeholder: navigator.userAgent.includes("Windows") ? "COM3" : "/dev/ttyUSB0", list: "serial-options", spellcheck: "false" });
+  const serialList = el("datalist", { id: "serial-options" });
+  const fillPorts = async () => {
+    const ports = await api.serialPorts().catch(() => [] as string[]);
+    serialList.replaceChildren(...ports.map((p) => el("option", { value: p })));
+    portsHint.textContent = ports.length ? `Found: ${ports.join(", ")}` : "No serial ports found. Plug the adapter in and press Refresh, or type the port.";
+  };
+  const portsHint = el("small", { class: "hint" });
+  const refresh = el("button", { class: "btn", type: "button", text: "Refresh" });
+  refresh.addEventListener("click", () => void fillPorts());
+  const baudList = el("datalist", { id: "baud-options" }, ...BAUD_RATES.map((b) => el("option", { value: String(b) })));
+  const baud = el("input", { value: String(ser.baud), type: "number", min: "50", max: "4000000", list: "baud-options" });
+  const dataBits = select(["8", "7", "6", "5"].map((v) => ({ label: v, value: v })), String(ser.dataBits));
+  const parity = select<Parity>(
+    [
+      { label: "None", value: "none" },
+      { label: "Odd", value: "odd" },
+      { label: "Even", value: "even" },
+    ],
+    ser.parity,
+  );
+  const stopBits = select(["1", "2"].map((v) => ({ label: v, value: v })), String(ser.stopBits));
+  const flow = select<Flow>(
+    [
+      { label: "None", value: "none" },
+      { label: "XON/XOFF (software)", value: "software" },
+      { label: "RTS/CTS (hardware)", value: "hardware" },
+    ],
+    ser.flow,
+  );
+  const serialBox = el(
+    "div",
+    { class: "serial-box" },
+    serialList,
+    baudList,
+    field("Serial port", el("div", { class: "inline" }, serialPath, refresh)),
+    portsHint,
+    el("div", { class: "grid" }, field("Speed (baud)", baud, "115200 suits most routers and boards; older switches often use 9600."), field("Flow control", flow)),
+    el("div", { class: "grid three" }, field("Data bits", dataBits), field("Parity", parity), field("Stop bits", stopBits)),
+  );
+  const telnetWarning = el("p", { class: "warning", text: TELNET_WARNING });
 
   const name = el("input", { value: s.name, placeholder: "Kali lab", spellcheck: "false" });
   const folders = [...new Set(sessions.map((x) => x.folder).filter(Boolean))];
@@ -1151,7 +1234,15 @@ async function editSession(existing?: Partial<SavedSession>) {
   const tags = el("input", { value: s.tags.map((t) => `#${t}`).join(" "), placeholder: "#web #client-a", spellcheck: "false" });
   const tmux = el("input", { value: s.tmux ?? "", placeholder: "e.g. work (empty for a plain shell)", spellcheck: "false" });
 
-  const read = (): SavedSession => ({
+  const readSerial = (): SerialSettings => ({
+    path: serialPath.value.trim(),
+    baud: Number(baud.value),
+    dataBits: Number(dataBits.value),
+    parity: parity.value as Parity,
+    stopBits: Number(stopBits.value),
+    flow: flow.value as Flow,
+  });
+  const readAll = (): SavedSession => ({
     ...s,
     environment: env.value as Environment,
     tags: parseTags(tags.value),
@@ -1167,15 +1258,49 @@ async function editSession(existing?: Partial<SavedSession>) {
     autoLog: autoLog.checked,
     forwards: tunnels.read(),
     jumpSession: jump.value || null,
+    protocol: protocol.value as Exclude<Protocol, "local">,
+    serial: protocol.value === "serial" ? readSerial() : null,
   });
+  // Settings that don't apply to the chosen protocol aren't kept, so they can't surprise later.
+  const read = (): SavedSession => {
+    const v = readAll();
+    if (v.protocol === "ssh") return v;
+    return { ...v, host: v.protocol === "serial" ? "" : v.host, port: v.protocol === "serial" ? 0 : v.port, tmux: "", forwards: [], jumpSession: null, autoOpenTailscale: false, auth: "password", keyPath: null };
+  };
+
+  const hostRow = el("div", { class: "grid host-row" }, field("Host", host), field("Port", port));
+  const userRow = el("div", { class: "grid" }, field("Username", user), field("Login with", auth));
+  const tmuxField = field("tmux session", tmux, "Attach to this tmux session on the server when connecting, creating it if needed, so programs keep running if the connection drops. Uses a plain shell if tmux isn't installed. GhostKey never closes tmux sessions.");
+  let shown = protocol.value;
+  const syncProtocol = () => {
+    const p = protocol.value;
+    // Swap the port only while it still holds the previous protocol's default.
+    const before = PROTOCOLS.find((x) => x.value === shown);
+    const after = PROTOCOLS.find((x) => x.value === p);
+    if (before && after && after.port && Number(port.value) === (before.value === "ssh" ? prefs.defaultPort : before.port)) port.value = String(p === "ssh" ? prefs.defaultPort : after.port);
+    shown = p;
+    const ssh = p === "ssh";
+    hostRow.hidden = p === "serial";
+    serialBox.hidden = p !== "serial";
+    telnetWarning.hidden = p !== "telnet";
+    userRow.hidden = !ssh;
+    for (const n of [jumpField, tmuxField, autoRow, tunnels.el, forget]) n.hidden = !ssh;
+    keyField.hidden = !ssh || auth.value !== "key";
+    if (p === "serial" && !serialList.children.length) void fillPorts();
+  };
+  protocol.addEventListener("change", syncProtocol);
+  syncProtocol();
 
   const choice = await showModal<"cancel" | "save" | "connect">({
     title: isNew ? "New session" : "Edit session",
     body: [
       folderList,
       el("div", { class: "grid" }, field("Name", name), field("Folder", folder)),
-      el("div", { class: "grid host-row" }, field("Host", host), field("Port", port)),
-      el("div", { class: "grid" }, field("Username", user), field("Login with", auth)),
+      field("Type", protocol),
+      telnetWarning,
+      hostRow,
+      serialBox,
+      userRow,
       el(
         "div",
         { class: "grid" },
@@ -1184,7 +1309,7 @@ async function editSession(existing?: Partial<SavedSession>) {
       ),
       keyField,
       jumpField,
-      field("tmux session", tmux, "Attach to this tmux session on the server when connecting, creating it if needed, so programs keep running if the connection drops. Uses a plain shell if tmux isn't installed. GhostKey never closes tmux sessions."),
+      tmuxField,
       autoRow,
       logRow,
       logHint,
@@ -1200,7 +1325,10 @@ async function editSession(existing?: Partial<SavedSession>) {
     validate: () => {
       const v = read();
       if (!v.name) return "Give the session a name.";
+      if (v.protocol === "serial") return serialProblem(v.serial);
       if (!v.host || /\s/.test(v.host)) return "Enter a host without spaces.";
+      if (!Number.isInteger(v.port) || v.port < 1 || v.port > 65535) return "Port must be between 1 and 65535.";
+      if (v.protocol === "telnet") return null;
       if (!Number.isInteger(v.port) || v.port < 1 || v.port > 65535) return "Port must be between 1 and 65535.";
       if (!v.username) return "Enter a username.";
       if (v.auth === "key" && !v.keyPath) return "Choose a key file.";
@@ -1730,6 +1858,7 @@ async function quit() {
 async function showShortcuts() {
   const rows: [string, string][] = [
     ["Ctrl+Shift+T", "New tab"],
+    ["Ctrl+Shift+N", "New local terminal"],
     ["Ctrl+Shift+W", "Close pane"],
     ["Ctrl+Shift+R / D", "Split right / down"],
     ["Alt+Arrow", "Move between panes"],
@@ -1777,6 +1906,7 @@ const menus: Menu[] = [
     items: [
       { label: "New tab", shortcut: "Ctrl+Shift+T", run: () => newTab() },
       { label: "New session…", run: () => editSession() },
+      { label: "New local terminal", shortcut: "Ctrl+Shift+N", run: openLocal },
       { label: "Quick connect", run: focusQuickConnect },
       { label: "Import sessions…", run: () => void importSessions() },
       { label: "SSH keys…", run: () => void openKeyManager() },
@@ -1832,10 +1962,10 @@ const menus: Menu[] = [
       { label: "Disconnect", run: () => conn().disconnect(), enabled: () => conn().active },
       "-",
       { label: "Session log", shortcut: "Ctrl+Shift+L", checked: () => !!conn().logPath, run: () => conn().toggleLog(), enabled: () => conn().online },
-      { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles() },
-      { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online },
+      { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles(), enabled: () => activePane().filesOpen || !conn().request || hasSshFeatures(conn().request) },
+      { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online && hasSshFeatures(conn().request) },
       { label: "Connection diagnostics…", run: () => void showDiagnostics() },
-      { label: "tmux sessions…", run: () => void openTmux(), enabled: () => conn().online },
+      { label: "tmux sessions…", run: () => void openTmux(), enabled: () => conn().online && hasSshFeatures(conn().request) },
       "-",
       { label: "Broadcast input…", shortcut: "Ctrl+Shift+I", run: () => void chooseBroadcast() },
       { label: "Stop broadcasting", run: stopBroadcast, enabled: () => broadcast.on },

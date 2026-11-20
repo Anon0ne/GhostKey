@@ -32,6 +32,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 vte = "0.14"
+portable-pty = "0.9"
+serialport = { version = "4", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

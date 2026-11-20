@@ -373,6 +373,13 @@ fn stop_forward(ssh: State<'_, Arc<Ssh>>, id: u32, forward: Uuid) {
 }
 
 #[tauri::command]
+async fn serial_ports() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(ssh::list_serial_ports)
+        .await
+        .unwrap_or_default()
+}
+
+#[tauri::command]
 async fn list_tmux(ssh: State<'_, Arc<Ssh>>, id: u32) -> CmdResult<tmux::TmuxList> {
     ssh.list_tmux(id).await.map_err(err)
 }
@@ -483,6 +490,7 @@ pub fn run() {
             sftp_transfer,
             sftp_cancel,
             list_tmux,
+            serial_ports,
             list_bookmarks,
             save_bookmark,
             delete_bookmark,

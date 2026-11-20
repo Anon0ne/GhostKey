@@ -8,6 +8,7 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import { api, type BannerLink, type Prompt, type PromptAnswer } from "./api";
 import { ansi, Connection, type BaseRequest } from "./connection";
+import { hasSshFeatures } from "./protocols";
 import { FilePanel } from "./filePanel";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { needsPastePreview, pasteLineCount, pastePreview } from "./paste";
@@ -219,6 +220,7 @@ export class Pane {
     this.term.writeln("");
     this.term.writeln("  Double-click a saved session, or type " + ansi.ok("user@host") + " in Quick connect.");
     this.term.writeln(ansi.dim("  Ctrl+Shift+T new tab, Ctrl+Shift+R split right, Ctrl+Shift+D split down."));
+    this.term.writeln(ansi.dim("  Ctrl+Shift+N opens a terminal on this computer. Telnet and serial sessions are in New session."));
     this.term.writeln(ansi.dim("  Ctrl+Shift+C / Ctrl+Shift+V copy and paste. Ctrl+= and Ctrl+- change the font size."));
     this.term.writeln("");
   }
@@ -367,6 +369,8 @@ export class Pane {
 
   /** Shows or hides the SFTP file panel beside the terminal. */
   toggleFiles() {
+    // Files need SFTP, which only SSH has.
+    if (!this.files && this.conn.request && !hasSshFeatures(this.conn.request)) return;
     if (this.files) {
       this.files.dispose();
       this.files = null;
