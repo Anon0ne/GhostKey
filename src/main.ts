@@ -3,6 +3,8 @@ import "@fontsource/fira-code/700.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
+import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 
 import { api, type ConnectRequest, type SavedSession } from "./api";
@@ -14,29 +16,48 @@ import { pastePreview } from "./paste";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { openTunnels, savedTunnelsEditor, tunnelsChanged } from "./tunnelUi";
-import { DEFAULT_FONT_SIZE } from "./theme";
+import { MenuBar, type Menu } from "./menu";
+import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
+import { THEME_IDS, THEMES, themeById } from "./theme";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-function loadPref(key: string, fallback: string): string {
+function storage(): Storage | null {
   try {
-    return localStorage.getItem(`ghostkey.${key}`) ?? fallback;
+    return localStorage;
   } catch {
-    return fallback;
-  }
-}
-
-function savePref(key: string, value: string) {
-  try {
-    localStorage.setItem(`ghostkey.${key}`, value);
-  } catch {
-    // Preferences are a convenience; ignore storage failures.
+    return null;
   }
 }
 
 let sessions: SavedSession[] = [];
 let snippets: Snippet[] = [];
-let fontSize = Number(loadPref("fontSize", String(DEFAULT_FONT_SIZE))) || DEFAULT_FONT_SIZE;
+let prefs: Prefs = loadPrefs(storage(), THEME_IDS);
+
+function termOptions() {
+  return {
+    theme: themeById(prefs.theme).term,
+    fontFamily: prefs.fontFamily,
+    cursorStyle: prefs.cursorStyle,
+    cursorBlink: prefs.cursorBlink,
+    scrollback: prefs.scrollback,
+  };
+}
+
+/** Applies prefs to the app shell and every terminal, and saves them. */
+function setPrefs(next: Prefs) {
+  prefs = next;
+  savePrefs(storage(), prefs);
+  const theme = themeById(prefs.theme);
+  const root = document.documentElement;
+  for (const [name, value] of Object.entries(theme.chrome)) root.style.setProperty(name, value);
+  root.style.colorScheme = theme.dark ? "dark" : "light";
+  root.style.setProperty("--mono", prefs.fontFamily);
+  $("app").classList.toggle("no-sidebar", !prefs.showSidebar);
+  $("snippet-bar").hidden = !prefs.showSnippetBar;
+  const options = { ...termOptions(), fontSize: prefs.fontSize };
+  for (const tab of tabs) panes(tab.root).forEach((p) => p.applyOptions(options));
+}
 
 // ---------------------------------------------------------------- tabs and panes
 
@@ -50,7 +71,9 @@ const tabs: Tab[] = [];
 let current: Tab;
 
 const host: PaneHost = {
-  fontSize: () => fontSize,
+  fontSize: () => prefs.fontSize,
+  termOptions,
+  copyOnSelect: () => prefs.copyOnSelect,
   activate: (pane) => focusPane(pane, false),
   changed: (pane) => {
     renderTabs();
@@ -281,9 +304,13 @@ function shortcut(e: KeyboardEvent): boolean {
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (mod && !e.shiftKey && !e.altKey) {
-    if (key === "=" || key === "+") return setFontSize(fontSize + 1);
-    if (key === "-") return setFontSize(fontSize - 1);
-    if (key === "0") return setFontSize(DEFAULT_FONT_SIZE);
+    if (key === "=" || key === "+") return setFontSize(prefs.fontSize + 1);
+    if (key === "-") return setFontSize(prefs.fontSize - 1);
+    if (key === "0") return setFontSize(DEFAULT_PREFS.fontSize);
+    if (key === ",") {
+      void openSettings();
+      return true;
+    }
     if (key === "PageUp" || key === "PageDown") {
       const i = tabs.indexOf(current) + (key === "PageUp" ? -1 : 1);
       selectTab(tabs[(i + tabs.length) % tabs.length]);
@@ -316,7 +343,16 @@ function shortcut(e: KeyboardEvent): boolean {
       case "KeyE":
         activePane().toggleFiles();
         return true;
+      case "KeyB":
+        setPrefs({ ...prefs, showSidebar: !prefs.showSidebar });
+        return true;
     }
+  }
+  // Not from the terminal: htop, mc and others use F10 themselves.
+  const inTerminal = !!(e.target as HTMLElement | null)?.closest?.(".xterm");
+  if (e.key === "F10" && !mod && !e.altKey && !e.shiftKey && !inTerminal) {
+    menuBar.focusFirst();
+    return true;
   }
   if (e.altKey && !mod && !e.shiftKey) {
     const arrows: Record<string, Direction> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
@@ -334,8 +370,9 @@ function shortcut(e: KeyboardEvent): boolean {
 }
 
 function setFontSize(size: number): true {
-  fontSize = Math.max(9, Math.min(32, size));
-  savePref("fontSize", String(fontSize));
+  const fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
+  prefs = { ...prefs, fontSize };
+  savePrefs(storage(), prefs);
   for (const tab of tabs) panes(tab.root).forEach((p) => p.setFontSize(fontSize));
   return true;
 }
@@ -653,9 +690,57 @@ async function editSnippet(existing?: Snippet) {
 
 // ---------------------------------------------------------------- settings
 
+function select<T extends string>(options: { label: string; value: T }[], value: T): HTMLSelectElement {
+  const node = el("select", {}, ...options.map((o) => el("option", { value: o.value, text: o.label })));
+  node.value = value;
+  return node;
+}
+
 async function openSettings() {
+  const before = prefs;
   let dir = await api.getLogDir().catch((e) => String(e));
   let reset = false;
+
+  const theme = select(THEMES.map((t) => ({ label: t.label, value: t.id })), prefs.theme);
+  const font = select(FONT_CHOICES, prefs.fontFamily);
+  const size = el("input", { type: "number", min: String(MIN_FONT_SIZE), max: String(MAX_FONT_SIZE), value: String(prefs.fontSize) });
+  const cursor = select<CursorStyle>(
+    [
+      { label: "Block", value: "block" },
+      { label: "Bar", value: "bar" },
+      { label: "Underline", value: "underline" },
+    ],
+    prefs.cursorStyle,
+  );
+  const [blinkRow, blink] = checkbox("Blinking cursor", prefs.cursorBlink);
+  const scrollback = el("input", { type: "number", min: "1000", max: "200000", step: "1000", value: String(prefs.scrollback) });
+  const [copyRow, copySelect] = checkbox("Copy text as soon as it's selected", prefs.copyOnSelect);
+  const [sidebarRow, sidebar] = checkbox("Show the session list (Ctrl+Shift+B)", prefs.showSidebar);
+  const [barRow, bar] = checkbox("Show the snippet bar", prefs.showSnippetBar);
+  const user = el("input", { value: prefs.defaultUser, placeholder: "e.g. kali", spellcheck: "false" });
+  const port = el("input", { type: "number", min: "1", max: "65535", value: String(prefs.defaultPort) });
+
+  const read = (): Prefs =>
+    normalizePrefs(
+      {
+        ...prefs,
+        theme: theme.value,
+        fontFamily: font.value,
+        fontSize: Number(size.value),
+        cursorStyle: cursor.value,
+        cursorBlink: blink.checked,
+        scrollback: Number(scrollback.value),
+        copyOnSelect: copySelect.checked,
+        showSidebar: sidebar.checked,
+        showSnippetBar: bar.checked,
+        defaultUser: user.value,
+        defaultPort: Number(port.value),
+      },
+      THEME_IDS,
+    );
+  // Show changes as they are made; Cancel puts everything back.
+  for (const input of [theme, font, size, cursor, blink, sidebar, bar]) input.addEventListener("change", () => setPrefs(read()));
+
   const path = el("input", { value: dir, readonly: true, spellcheck: "false" });
   const browse = el("button", { class: "btn", type: "button", text: "Change…" });
   browse.addEventListener("click", async () => {
@@ -674,11 +759,24 @@ async function openSettings() {
   const openBtn = el("button", { class: "link-btn", type: "button", text: "Open the log folder" });
   openBtn.addEventListener("click", () => api.openLogDir().catch((e) => confirm("Couldn't open the folder", String(e), "OK")));
 
+  const section = (title: string, ...children: HTMLElement[]) => el("fieldset", { class: "settings-section" }, el("legend", { text: title }), ...children);
   const choice = await showModal<boolean>({
     title: "Settings",
+    wide: true,
     body: [
-      field("Session log folder", el("div", { class: "inline" }, path, browse), "Logs are plain text with colors removed. They hold everything the server prints, which can include secrets."),
-      el("div", { class: "inline links" }, resetBtn, openBtn),
+      el(
+        "div",
+        { class: "settings-grid" },
+        section("Appearance", field("Theme", theme), field("Font", font, "Fonts other than Fira Code are used when installed."), field("Font size", size, "Ctrl+= and Ctrl+- also change it.")),
+        section("Terminal", field("Cursor", cursor), blinkRow, field("Scrollback lines", scrollback, "Lines kept per terminal for scrolling and Find."), copyRow),
+        section("Window", sidebarRow, barRow),
+        section("New connections", field("Default user", user, "Quick connect uses it when the address has no user@."), field("Default port", port)),
+      ),
+      section(
+        "Session logs",
+        field("Folder", el("div", { class: "inline" }, path, browse), "Logs are plain text with colors removed. They hold everything the server prints, which can include secrets."),
+        el("div", { class: "inline links" }, resetBtn, openBtn),
+      ),
     ],
     buttons: [
       { label: "Cancel", value: () => false },
@@ -686,7 +784,11 @@ async function openSettings() {
     ],
     onDismiss: () => false,
   }).result;
-  if (!choice) return;
+  if (!choice) {
+    setPrefs(before);
+    return;
+  }
+  setPrefs(read());
   try {
     await api.setLogDir(reset ? null : dir);
   } catch (e) {
@@ -708,7 +810,7 @@ async function refreshSessions() {
 
 function collapsedFolders(): Set<string> {
   try {
-    return new Set(JSON.parse(loadPref("collapsed", "[]")) as string[]);
+    return new Set(JSON.parse(storage()?.getItem("ghostkey.collapsed") ?? "[]") as string[]);
   } catch {
     return new Set();
   }
@@ -748,7 +850,11 @@ function renderSessions() {
         const set = collapsedFolders();
         if (set.has(folder)) set.delete(folder);
         else set.add(folder);
-        savePref("collapsed", JSON.stringify([...set]));
+        try {
+          storage()?.setItem("ghostkey.collapsed", JSON.stringify([...set]));
+        } catch {
+          // Collapsed folders are a convenience.
+        }
         renderSessions();
       });
       container.append(head);
@@ -830,8 +936,8 @@ async function editSession(existing?: Partial<SavedSession>) {
     name: existing?.name ?? "",
     folder: existing?.folder ?? "",
     host: existing?.host ?? "",
-    port: existing?.port ?? 22,
-    username: existing?.username ?? "",
+    port: existing?.port ?? prefs.defaultPort,
+    username: existing?.username ?? prefs.defaultUser,
     auth: existing?.auth ?? "password",
     keyPath: existing?.keyPath ?? null,
     autoOpenTailscale: existing?.autoOpenTailscale ?? false,
@@ -949,9 +1055,9 @@ async function editSession(existing?: Partial<SavedSession>) {
 function parseQuick(text: string): { user: string; host: string; port: number } | null {
   const m = /^(?:([^@\s]+)@)?(\[[^\]]+\]|[^:\s]+)(?::(\d{1,5}))?$/.exec(text.trim());
   if (!m) return null;
-  const port = m[3] ? Number(m[3]) : 22;
+  const port = m[3] ? Number(m[3]) : prefs.defaultPort;
   if (port < 1 || port > 65535) return null;
-  return { user: m[1] ?? "", host: m[2].replace(/^\[|\]$/g, ""), port };
+  return { user: m[1] ?? prefs.defaultUser, host: m[2].replace(/^\[|\]$/g, ""), port };
 }
 
 $("quick-connect").addEventListener("submit", (e) => {
@@ -974,6 +1080,133 @@ $("quick-connect").addEventListener("submit", (e) => {
   );
 });
 $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).classList.remove("invalid"));
+
+// ---------------------------------------------------------------- menu bar
+
+const REPO_URL = "https://github.com/Anon0ne/GhostKey";
+
+function focusQuickConnect() {
+  if (!prefs.showSidebar) setPrefs({ ...prefs, showSidebar: true });
+  const input = $<HTMLInputElement>("quick-input");
+  input.focus();
+  input.select();
+}
+
+async function quit() {
+  const live = tabs.flatMap((t) => panes(t.root)).filter((p) => p.conn.active);
+  if (live.length) {
+    const ok = await confirm("Quit GhostKey?", `${live.length === 1 ? "A session is" : `${live.length} sessions are`} still connected. Disconnect and quit?`, "Quit", true);
+    if (!ok) return;
+  }
+  await getCurrentWindow().close();
+}
+
+async function showShortcuts() {
+  const rows: [string, string][] = [
+    ["Ctrl+Shift+T", "New tab"],
+    ["Ctrl+Shift+W", "Close pane"],
+    ["Ctrl+Shift+R / D", "Split right / down"],
+    ["Alt+Arrow", "Move between panes"],
+    ["Alt+1…9, Ctrl+PgUp/PgDn", "Switch tabs"],
+    ["Ctrl+Shift+C / V", "Copy / paste (right-click also works)"],
+    ["Ctrl+Shift+F", "Find in terminal"],
+    ["Ctrl+Shift+S", "Snippets"],
+    ["Ctrl+Shift+E", "Files (SFTP)"],
+    ["Ctrl+Shift+L", "Start or stop the session log"],
+    ["Ctrl+Shift+B", "Show or hide the session list"],
+    ["Ctrl+= / - / 0", "Font size"],
+    ["Ctrl+,", "Settings"],
+    ["F10", "Open the menu bar (outside the terminal)"],
+  ];
+  await showModal<null>({
+    title: "Keyboard shortcuts",
+    body: [el("table", { class: "shortcut-table" }, ...rows.map(([k, v]) => el("tr", {}, el("th", { text: k }), el("td", { text: v }))))],
+    buttons: [{ label: "Close", value: () => null, primary: true }],
+    onDismiss: () => null,
+  }).result;
+}
+
+async function showAbout() {
+  const version = await getVersion().catch(() => "");
+  const link = el("button", { class: "link-btn", type: "button", text: REPO_URL });
+  link.addEventListener("click", () => void api.openLink(REPO_URL).catch(() => {}));
+  await showModal<null>({
+    title: "About GhostKey",
+    body: [
+      el("p", { text: `GhostKey ${version}`.trim() }),
+      el("p", { class: "hint", text: "An SSH client for Windows and Linux with the Kali QTerminal look." }),
+      link,
+    ],
+    buttons: [{ label: "Close", value: () => null, primary: true }],
+    onDismiss: () => null,
+  }).result;
+}
+
+const conn = () => activePane().conn;
+const menus: Menu[] = [
+  {
+    label: "File",
+    items: [
+      { label: "New tab", shortcut: "Ctrl+Shift+T", run: () => newTab() },
+      { label: "New session…", run: () => editSession() },
+      { label: "Quick connect", run: focusQuickConnect },
+      { label: "Import sessions…", run: () => void importSessions() },
+      "-",
+      { label: "Settings…", shortcut: "Ctrl+,", run: () => void openSettings() },
+      "-",
+      { label: "Close pane", shortcut: "Ctrl+Shift+W", run: () => void closePane(activePane()) },
+      { label: "Close tab", run: () => void closeTab(current) },
+      { label: "Quit", run: () => void quit() },
+    ],
+  },
+  {
+    label: "Edit",
+    items: [
+      { label: "Copy", shortcut: "Ctrl+Shift+C", run: () => activePane().copy(), enabled: () => activePane().term.hasSelection() },
+      { label: "Paste", shortcut: "Ctrl+Shift+V", run: () => void activePane().paste(), enabled: () => conn().online },
+      { label: "Select all", run: () => activePane().term.selectAll() },
+      "-",
+      { label: "Find…", shortcut: "Ctrl+Shift+F", run: () => activePane().openSearch() },
+      { label: "Snippets…", shortcut: "Ctrl+Shift+S", run: () => openSnippets() },
+    ],
+  },
+  {
+    label: "View",
+    items: [
+      { label: "Session list", shortcut: "Ctrl+Shift+B", checked: () => prefs.showSidebar, run: () => setPrefs({ ...prefs, showSidebar: !prefs.showSidebar }) },
+      { label: "Snippet bar", checked: () => prefs.showSnippetBar, run: () => setPrefs({ ...prefs, showSnippetBar: !prefs.showSnippetBar }) },
+      "-",
+      { label: "Zoom in", shortcut: "Ctrl+=", run: () => setFontSize(prefs.fontSize + 1) },
+      { label: "Zoom out", shortcut: "Ctrl+-", run: () => setFontSize(prefs.fontSize - 1) },
+      { label: "Actual size", shortcut: "Ctrl+0", run: () => setFontSize(DEFAULT_PREFS.fontSize) },
+      "-",
+      { label: "Split right", shortcut: "Ctrl+Shift+R", run: () => splitPane("row") },
+      { label: "Split down", shortcut: "Ctrl+Shift+D", run: () => splitPane("column") },
+      { label: "Next tab", shortcut: "Ctrl+PgDn", run: () => selectTab(tabs[(tabs.indexOf(current) + 1) % tabs.length]), enabled: () => tabs.length > 1 },
+      { label: "Previous tab", shortcut: "Ctrl+PgUp", run: () => selectTab(tabs[(tabs.indexOf(current) - 1 + tabs.length) % tabs.length]), enabled: () => tabs.length > 1 },
+    ],
+  },
+  {
+    label: "Session",
+    items: [
+      { label: "Reconnect", run: () => conn().retry(), enabled: () => conn().canRetry },
+      { label: "Disconnect", run: () => conn().disconnect(), enabled: () => conn().active },
+      "-",
+      { label: "Session log", shortcut: "Ctrl+Shift+L", checked: () => !!conn().logPath, run: () => conn().toggleLog(), enabled: () => conn().online },
+      { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles() },
+      { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online },
+    ],
+  },
+  {
+    label: "Help",
+    items: [
+      { label: "Keyboard shortcuts", run: () => void showShortcuts() },
+      { label: "GhostKey on GitHub", run: () => void api.openLink(REPO_URL).catch(() => {}) },
+      { label: "About GhostKey", run: () => void showAbout() },
+    ],
+  },
+];
+const menuBar = new MenuBar($("menubar"), menus);
 
 // ---------------------------------------------------------------- wiring
 
@@ -1001,6 +1234,7 @@ document.addEventListener("keydown", (e) => {
 async function start() {
   // Load both weights first so bold prompts render in real bold from the start.
   await Promise.allSettled([document.fonts.load('14px "Fira Code"'), document.fonts.load('bold 14px "Fira Code"')]);
+  setPrefs(prefs);
   newTab();
   await Promise.all([refreshSessions(), refreshSnippets()]);
 }
