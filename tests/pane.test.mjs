@@ -26,7 +26,7 @@ function node(tag, props = {}, ...children) {
   };
 }
 
-function harness() {
+function harness(extraHost = {}) {
   const modals = [], terminals = [], searches = [];
   let clipboard = 'echo one\necho two';
   class Terminal {
@@ -66,7 +66,7 @@ function harness() {
   });
   globalThis.ResizeObserver = class { observe() {} disconnect() {} };
   const closed = [];
-  const host = { close: (pane) => closed.push(pane), fontSize: () => 14, activate() {}, changed() {}, shortcut: () => false };
+  const host = { close: (pane) => closed.push(pane), fontSize: () => 14, activate() {}, changed() {}, shortcut: () => false, ...extraHost };
   return { pane: new Pane(host), another: () => new Pane(host), modals, terminals, searches, closed,
     clipboard: (text) => { clipboard = text; } };
 }
@@ -212,4 +212,35 @@ test('reconnected or disposed panes do not regain focus from an old preview', as
   h.pane.dispose();
   await another;
   assert.equal(h.terminals[0].focusCalls, 0);
+});
+
+test('broadcast pastes name every destination and stop if the group changes', async () => {
+  let group = [];
+  const sent = [];
+  const h = harness({
+    destinations: (p) => (group.includes(p) ? group : [p]),
+    input: (p, data) => { for (const t of group.includes(p) ? group : [p]) sent.push([t, data]); },
+  });
+  const other = h.another();
+  group = [h.pane, other];
+  // Even a single word gets a review when it goes to several servers.
+  const first = h.pane.pasteText('whoami');
+  assert.equal(h.modals.length, 1);
+  assert.match(h.modals[0].opts.title, /2 terminals/);
+  assert.equal(h.modals[0].opts.buttons[1].label, 'Paste to all 2');
+  h.modals[0].approve();
+  await first;
+  assert.deepEqual(h.terminals[0].pasted, ['whoami']);
+
+  // The group changes while the review is open: nothing is pasted.
+  const second = h.pane.pasteText('id');
+  group = [h.pane];
+  h.modals[1].approve();
+  await second;
+  assert.deepEqual(h.terminals[0].pasted, ['whoami']);
+
+  // Typing goes through the host, which fans it out.
+  group = [h.pane, other];
+  h.terminals[0].data('x');
+  assert.deepEqual(sent.map(([t, d]) => [t === h.pane ? 'a' : 'b', d]), [['a', 'x'], ['b', 'x']]);
 });

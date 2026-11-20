@@ -16,6 +16,7 @@ import { pastePreview } from "./paste";
 import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { openTunnels, savedTunnelsEditor, tunnelsChanged } from "./tunnelUi";
+import { Broadcast } from "./broadcast";
 import { MenuBar, type Menu } from "./menu";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
 import { THEME_IDS, THEMES, themeById } from "./theme";
@@ -69,16 +70,23 @@ interface Tab {
 
 const tabs: Tab[] = [];
 let current: Tab;
+const broadcast = new Broadcast<Pane>();
 
 const host: PaneHost = {
   fontSize: () => prefs.fontSize,
   termOptions,
   copyOnSelect: () => prefs.copyOnSelect,
   autoReconnect: () => prefs.autoReconnect,
+  input: (pane, data) => {
+    for (const p of broadcast.targets(pane)) p.conn.input(data);
+  },
+  destinations: (pane) => broadcast.targets(pane),
+  label: (pane) => paneLabel(pane),
   activate: (pane) => focusPane(pane, false),
   changed: (pane) => {
     renderTabs();
     if (pane === activePane()) renderToolbar();
+    renderBroadcast();
   },
   shortcut: (_pane, e) => shortcut(e),
   close: (pane) => void closePane(pane),
@@ -194,7 +202,9 @@ async function closePane(pane: Pane) {
     if (!ok) return;
   }
   const root = remove(tab.root, pane);
+  broadcast.drop(pane);
   pane.dispose();
+  renderBroadcast();
   if (!root) {
     removeTab(tab);
     return;
@@ -216,7 +226,11 @@ async function closeTab(tab: Tab) {
     const ok = await confirm("Close this tab?", `This tab has ${live.length === 1 ? "an open session" : `${live.length} open sessions`} (${names}). Disconnect and close it?`, "Close", true);
     if (!ok) return;
   }
-  panes(tab.root).forEach((p) => p.dispose());
+  panes(tab.root).forEach((p) => {
+    broadcast.drop(p);
+    p.dispose();
+  });
+  renderBroadcast();
   removeTab(tab);
 }
 
@@ -346,6 +360,10 @@ function shortcut(e: KeyboardEvent): boolean {
         return true;
       case "KeyB":
         setPrefs({ ...prefs, showSidebar: !prefs.showSidebar });
+        return true;
+      case "KeyI":
+        if (broadcast.on) stopBroadcast();
+        else void chooseBroadcast();
         return true;
     }
   }
@@ -529,6 +547,15 @@ function destination(pane: Pane): string {
   return `${pane.conn.title} (${r.username}@${r.host}${r.port === 22 ? "" : `:${r.port}`})`;
 }
 
+/** Names a pane by its tab and position too, so two panes on one host can be told apart. */
+function paneLabel(pane: Pane): string {
+  const ti = tabs.findIndex((t) => panes(t.root).includes(pane));
+  if (ti < 0) return destination(pane);
+  const list = panes(tabs[ti].root);
+  const where = list.length > 1 ? `Tab ${ti + 1}, pane ${list.indexOf(pane) + 1}` : `Tab ${ti + 1}`;
+  return `${where}: ${destination(pane)}`;
+}
+
 /** Sends a snippet to the focused pane. Running it, or anything a paste would
  * review (several lines, control characters), is previewed first. The pane and
  * its connection are fixed before the preview, so changing focus or reconnecting
@@ -542,13 +569,17 @@ async function sendSnippet(s: Snippet) {
   }
   const bound = { id: pane.conn.id, request: pane.conn.request };
   const { text, enter } = payload(s);
-  if (needsPreview(s)) {
+  const targets = pane.destinations();
+  // Sending to several servers at once always gets a second look.
+  if (needsPreview(s) || targets.length > 1) {
     const lines = lineCount(s);
     const careful = risky(s);
     const ok = await showModal<boolean>({
       title: enter ? `Run "${s.name}"?` : `Type in "${s.name}"?`,
       body: [
-        el("div", { class: "fingerprint" }, el("span", { text: "Destination" }), el("code", { text: destination(pane) })),
+        targets.length > 1
+          ? el("div", { class: "fingerprint" }, el("span", { text: `Broadcast to ${targets.length} terminals` }), ...targets.map((p) => el("code", { text: paneLabel(p) })))
+          : el("div", { class: "fingerprint" }, el("span", { text: "Destination" }), el("code", { text: destination(pane) })),
         el("pre", { class: "snippet-preview", text: pastePreview(text) }),
         el("p", {
           class: "hint",
@@ -1123,6 +1154,7 @@ async function showShortcuts() {
     ["Ctrl+Shift+E", "Files (SFTP)"],
     ["Ctrl+Shift+L", "Start or stop the session log"],
     ["Ctrl+Shift+B", "Show or hide the session list"],
+    ["Ctrl+Shift+I", "Broadcast input to several terminals, or stop"],
     ["Ctrl+= / - / 0", "Font size"],
     ["Ctrl+,", "Settings"],
     ["F10", "Open the menu bar (outside the terminal)"],
@@ -1204,6 +1236,9 @@ const menus: Menu[] = [
       { label: "Session log", shortcut: "Ctrl+Shift+L", checked: () => !!conn().logPath, run: () => conn().toggleLog(), enabled: () => conn().online },
       { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles() },
       { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online },
+      "-",
+      { label: "Broadcast input…", shortcut: "Ctrl+Shift+I", run: () => void chooseBroadcast() },
+      { label: "Stop broadcasting", run: stopBroadcast, enabled: () => broadcast.on },
     ],
   },
   {
@@ -1216,6 +1251,68 @@ const menus: Menu[] = [
   },
 ];
 const menuBar = new MenuBar($("menubar"), menus);
+
+// ---------------------------------------------------------------- broadcast input
+
+/** Shows who broadcast reaches: a bar above the panes and an outline on each one. */
+function renderBroadcast() {
+  broadcast.prune();
+  const members = broadcast.members();
+  for (const tab of tabs) for (const p of panes(tab.root)) p.setBroadcast(members.includes(p));
+  const bar = $("broadcast-bar");
+  bar.hidden = members.length === 0;
+  if (!members.length) return;
+  const change = el("button", { class: "btn", type: "button", text: "Change…" });
+  change.addEventListener("click", () => void chooseBroadcast());
+  const stop = el("button", { class: "btn danger", type: "button", text: "Stop (Ctrl+Shift+I)" });
+  stop.addEventListener("click", stopBroadcast);
+  bar.replaceChildren(
+    el("strong", { text: `Broadcasting to ${members.length} terminals:` }),
+    el("span", { class: "broadcast-list", text: members.map((p) => paneLabel(p)).join(" · "), title: members.map((p) => paneLabel(p)).join("\n") }),
+    el("span", { class: "spacer" }),
+    change,
+    stop,
+  );
+}
+
+function stopBroadcast() {
+  broadcast.stop();
+  renderBroadcast();
+}
+
+/** Lets the user pick connected panes, from every tab, to type into at once. */
+async function chooseBroadcast() {
+  const live = tabs.flatMap((t) => panes(t.root)).filter((p) => p.conn.online);
+  if (live.length < 2) {
+    await confirm("Broadcast input", "Broadcast needs at least two connected terminals. Connect another session or split this one first.", "OK");
+    return;
+  }
+  const already = broadcast.members();
+  const inTab = panes(current.root);
+  const rows = live.map((p) => {
+    // Start from the current group, or from this tab's panes.
+    const [row, box] = checkbox(paneLabel(p), already.length ? already.includes(p) : inTab.includes(p));
+    return { p, box, row };
+  });
+  const ok = await showModal<boolean>({
+    title: "Broadcast input",
+    body: [
+      el("p", { text: "What you type in any chosen terminal goes to all of them. Pastes and snippets show every destination first." }),
+      el("div", { class: "broadcast-choices" }, ...rows.map((r) => r.row)),
+      el("p", { class: "hint", text: "A terminal that disconnects or reconnects leaves the group and has to be chosen again. Login prompts are never broadcast." }),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Broadcast", value: () => true, primary: true },
+    ],
+    validate: () => (rows.filter((r) => r.box.checked).length < 2 ? "Choose at least two terminals." : null),
+    onDismiss: () => false,
+  }).result;
+  if (!ok) return;
+  broadcast.choose(rows.filter((r) => r.box.checked).map((r) => r.p));
+  renderBroadcast();
+  activePane().focus();
+}
 
 // ---------------------------------------------------------------- network recovery
 
