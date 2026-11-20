@@ -6,6 +6,8 @@ import type { Forward, TunnelStatus } from "./tunnels";
 import type { Stage } from "./diagnostics";
 import type { Environment } from "./hostLabels";
 import type { Workspace } from "./workspace";
+import type { TmuxList } from "./tmux";
+import type { Bookmark } from "./bookmarks";
 
 export type AuthMethod = "password" | "key" | "agent";
 
@@ -27,6 +29,8 @@ export interface SavedSession {
   /** Labels for finding sessions. */
   tags: string[];
   environment: Environment;
+  /** tmux session to attach to on connect; empty for a plain shell. */
+  tmux: string;
 }
 
 export interface JumpRequest {
@@ -54,6 +58,8 @@ export interface ConnectRequest {
   forwards: Forward[];
   /** Jump hosts to go through first, outermost first. Empty connects directly. */
   jumps: JumpRequest[];
+  /** Attach to (or create) this tmux session instead of a plain shell. */
+  tmux: string | null;
   cols: number;
   rows: number;
 }
@@ -153,6 +159,10 @@ export const api = {
   listWorkspaces: () => invoke<unknown[]>("list_workspaces"),
   saveWorkspace: (workspace: Workspace) => invoke<void>("save_workspace", { workspace }),
   deleteWorkspace: (id: string) => invoke<void>("delete_workspace", { id }),
+  listBookmarks: () => invoke<Bookmark[]>("list_bookmarks"),
+  saveBookmark: (bookmark: Bookmark) => invoke<void>("save_bookmark", { bookmark }),
+  deleteBookmark: (id: string) => invoke<void>("delete_bookmark", { id }),
+  listTmux: (id: number) => invoke<TmuxList>("list_tmux", { id }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, text: string) => invoke<void>("write_text_file", { path, text }),
   agentStatus: () => invoke<AgentStatus>("agent_status"),

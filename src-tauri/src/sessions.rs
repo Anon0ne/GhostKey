@@ -54,6 +54,9 @@ pub struct SavedSession {
     /// What kind of system this is. Production gets extra warnings.
     #[serde(default)]
     pub environment: Environment,
+    /// tmux session to attach to (or create) on connect. Empty means a plain shell.
+    #[serde(default)]
+    pub tmux: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +191,9 @@ fn validate(s: &SavedSession) -> anyhow::Result<()> {
     if s.username.trim().is_empty() {
         anyhow::bail!("Username is required");
     }
+    if !s.tmux.is_empty() && !crate::tmux::valid_name(&s.tmux) {
+        anyhow::bail!("The tmux session name can use letters, digits, - and _ only");
+    }
     if s.auth == AuthMethod::Key && s.key_path.as_deref().unwrap_or("").trim().is_empty() {
         anyhow::bail!("Choose a key file for key login");
     }
@@ -214,6 +220,7 @@ mod tests {
             jump_session: None,
             tags: Vec::new(),
             environment: Environment::None,
+            tmux: String::new(),
         }
     }
 

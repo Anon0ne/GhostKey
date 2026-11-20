@@ -52,6 +52,9 @@ pub struct ConnectRequest {
     /// `ssh -J a,b`. Empty connects directly.
     #[serde(default)]
     pub jumps: Vec<JumpRequest>,
+    /// Attach to (or create) this tmux session instead of starting a plain shell.
+    #[serde(default)]
+    pub tmux: Option<String>,
     pub cols: u32,
     pub rows: u32,
 }
@@ -219,6 +222,8 @@ enum ConnCmd {
     StopLog,
     /// Opens an SFTP channel next to the shell.
     OpenSftp(oneshot::Sender<anyhow::Result<SftpSession>>),
+    /// Lists the server's tmux sessions over a separate channel.
+    ListTmux(oneshot::Sender<anyhow::Result<crate::tmux::TmuxList>>),
     StartForward(Forward),
     StopForward(Uuid),
     /// Checks the transport now, e.g. after the computer wakes from sleep.
@@ -377,6 +382,13 @@ impl Ssh {
         Ok(session)
     }
 
+    pub async fn list_tmux(&self, id: u32) -> anyhow::Result<crate::tmux::TmuxList> {
+        let (tx, rx) = oneshot::channel();
+        self.send(id, ConnCmd::ListTmux(tx));
+        rx.await
+            .map_err(|_| anyhow::anyhow!("The session is not connected"))?
+    }
+
     /// Forgets a broken SFTP session, so the next call opens a new one.
     pub async fn drop_sftp(&self, id: u32) {
         self.sftp.lock().await.remove(&id);
@@ -473,6 +485,7 @@ impl ConnCtx {
                 label: String::new(),
                 forwards: Vec::new(),
                 jumps: Vec::new(),
+                tmux: None,
                 cols: self.req.cols,
                 rows: self.req.rows,
             },
@@ -839,7 +852,14 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
     channel
         .request_pty(true, "xterm-256color", req.cols, req.rows, 0, 0, &[])
         .await?;
-    channel.request_shell(true).await?;
+    match req.tmux.as_deref().filter(|n| !n.is_empty()) {
+        Some(name) => {
+            channel
+                .exec(true, crate::tmux::attach_command(name)?)
+                .await?
+        }
+        None => channel.request_shell(true).await?,
+    }
     let (mut reader, writer) = channel.split();
     ctx.step(Stage::Shell, true, None);
     ctx.sinks.event(ConnEvent::Connected);
@@ -902,6 +922,12 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
                 Some(ConnCmd::StopLog) => stop_log(&ctx, &mut log),
                 Some(ConnCmd::StartForward(f)) => tunnels.start(f),
                 Some(ConnCmd::StopForward(id)) => tunnels.stop(id),
+                Some(ConnCmd::ListTmux(reply)) => {
+                    let handle = handle.clone();
+                    tokio::spawn(async move {
+                        let _ = reply.send(list_tmux(&handle).await);
+                    });
+                }
                 Some(ConnCmd::OpenSftp(reply)) => {
                     // Opened in its own task, so the terminal keeps flowing meanwhile.
                     let handle = handle.clone();
@@ -924,6 +950,33 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
         let _ = jh.disconnect(Disconnect::ByApplication, "", "en").await;
     }
     Ok(ended)
+}
+
+/// Runs the fixed tmux list command on its own channel and reads its output.
+async fn list_tmux(handle: &client::Handle<Handler>) -> anyhow::Result<crate::tmux::TmuxList> {
+    const MAX_OUTPUT: usize = 256 * 1024;
+    let mut channel = handle.channel_open_session().await?;
+    channel.exec(true, crate::tmux::LIST_COMMAND).await?;
+    let mut out = Vec::new();
+    let read = async {
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    out.extend_from_slice(&data);
+                    if out.len() > MAX_OUTPUT {
+                        anyhow::bail!("The server sent too much tmux output");
+                    }
+                }
+                ChannelMsg::Close | ChannelMsg::Eof => break,
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    };
+    tokio::time::timeout(Duration::from_secs(10), read)
+        .await
+        .map_err(|_| anyhow::anyhow!("The server didn't answer the tmux list in time"))??;
+    Ok(crate::tmux::parse_list(&String::from_utf8_lossy(&out)))
 }
 
 async fn open_sftp(handle: &client::Handle<Handler>) -> anyhow::Result<SftpSession> {
@@ -1271,6 +1324,16 @@ mod live {
         auth: AuthMethod,
         opened: Arc<StdMutex<Vec<String>>>,
     ) -> (u32, UnboundedReceiver<Seen>) {
+        start_with(ssh, env, auth, opened, None)
+    }
+
+    fn start_with(
+        ssh: &Arc<Ssh>,
+        env: &Env,
+        auth: AuthMethod,
+        opened: Arc<StdMutex<Vec<String>>>,
+        tmux: Option<String>,
+    ) -> (u32, UnboundedReceiver<Seen>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let tx2 = tx.clone();
         let sinks = Sinks {
@@ -1297,6 +1360,7 @@ mod live {
             label: "live test".into(),
             forwards: Vec::new(),
             jumps: Vec::new(),
+            tmux,
             cols: 80,
             rows: 24,
         };
@@ -1633,6 +1697,73 @@ mod live {
         // The shell still works alongside SFTP.
         ssh.input(id, b"echo GK_$((40+3))\n".to_vec());
         expect_output(&mut rx, "GK_43").await;
+        ssh.close(id);
+    }
+
+    #[tokio::test]
+    async fn tmux_session_survives_a_disconnect() {
+        let Some(env) = env() else {
+            eprintln!("GHOSTKEY_TEST_HOST not set; skipping live tmux test");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(
+            dir.path().join("known_hosts"),
+            dir.path().join("logs"),
+        ));
+        let name = format!("gk-test-{}", &Uuid::new_v4().simple().to_string()[..8]);
+        let pw = env.password.clone();
+        let answer = |p: &Prompt| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            _ => yes(&[&pw]),
+        };
+        let connect = |rx_name: &str| {
+            start_with(
+                &ssh,
+                &env,
+                AuthMethod::Password,
+                Arc::new(StdMutex::new(Vec::new())),
+                Some(rx_name.to_string()),
+            )
+        };
+
+        let (id, mut rx) = connect(&name);
+        let (_, _, closed) = drive(&ssh, &mut rx, answer).await;
+        assert_eq!(closed, None, "login failed");
+        // Input sent before tmux takes over the terminal can be dropped, so wait for its status line.
+        expect_output(&mut rx, "[gk-test").await;
+        ssh.input(id, b"GKMARK=kept-$((20+22))\n".to_vec());
+        ssh.input(id, b"echo set-$GKMARK\n".to_vec());
+        expect_output(&mut rx, "set-kept-42").await;
+        let list = ssh.list_tmux(id).await.unwrap();
+        if !list.installed {
+            eprintln!("tmux isn't installed on the test server; skipping");
+            ssh.close(id);
+            return;
+        }
+        let me = list.sessions.iter().find(|s| s.name == name);
+        assert_eq!(me.map(|s| s.attached), Some(1), "{list:?}");
+        ssh.close(id);
+
+        // A new connection to the same name finds the same shell, variables and all.
+        let (id, mut rx) = connect(&name);
+        let (_, _, closed) = drive(&ssh, &mut rx, answer).await;
+        assert_eq!(closed, None, "second login failed");
+        expect_output(&mut rx, "[gk-test").await;
+        ssh.input(id, b"echo again-$GKMARK\n".to_vec());
+        expect_output(&mut rx, "again-kept-42").await;
+        // The test cleans up after itself; GhostKey never does this on its own.
+        // Ending the session ends the attached client, which closes the channel.
+        ssh.input(id, format!("tmux kill-session -t {name}\n").into_bytes());
+        let ended = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(seen) = rx.recv().await {
+                if matches!(seen, Seen::Event(ConnEvent::Closed { .. })) {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(ended.is_ok(), "tmux session wasn't ended");
         ssh.close(id);
     }
 
@@ -1999,6 +2130,7 @@ mod live {
                 label: String::new(),
                 forwards: vec![local.clone()],
                 jumps: vec![hop.clone(), hop],
+                tmux: None,
                 cols: 80,
                 rows: 24,
             },

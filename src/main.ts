@@ -24,6 +24,8 @@ import { report, stageLabel, type Step } from "./diagnostics";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
 import { jumpChain, jumpChoices, routeText } from "./jumps";
+import { describeTmux, tmuxNameProblem } from "./tmux";
+import { suggestRedaction, toJson, toMarkdown, NOT_FORENSIC, type Bookmark } from "./bookmarks";
 import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } from "./workspace";
 import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
@@ -197,7 +199,7 @@ function splitPane(dir: Dir) {
   if (from.conn.request) {
     const req = from.conn.request;
     // The new shell shares the server but not the tunnels, whose ports are taken.
-    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false, forwards: [] }, from.conn.title));
+    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false, forwards: [], tmux: null }, from.conn.title));
   } else {
     pane.welcome();
   }
@@ -436,6 +438,9 @@ function shortcut(e: KeyboardEvent): boolean {
       case "KeyI":
         if (broadcast.on) stopBroadcast();
         else void chooseBroadcast();
+        return true;
+      case "KeyM":
+        void bookmarkSelection();
         return true;
     }
   }
@@ -1063,6 +1068,7 @@ function requestFor(s: SavedSession): BaseRequest | null {
       label: s.name,
       forwards: s.forwards ?? [],
       jumps,
+      tmux: s.tmux || null,
     }
   );
 }
@@ -1084,6 +1090,7 @@ async function editSession(existing?: Partial<SavedSession>) {
     jumpSession: existing?.jumpSession ?? null,
     tags: existing?.tags ?? [],
     environment: existing?.environment ?? "",
+    tmux: existing?.tmux ?? "",
   };
 
   const name = el("input", { value: s.name, placeholder: "Kali lab", spellcheck: "false" });
@@ -1142,11 +1149,13 @@ async function editSession(existing?: Partial<SavedSession>) {
   const env = el("select", {}, ...ENVIRONMENTS.map((e) => el("option", { value: e.value, text: e.label })));
   env.value = s.environment ?? "";
   const tags = el("input", { value: s.tags.map((t) => `#${t}`).join(" "), placeholder: "#web #client-a", spellcheck: "false" });
+  const tmux = el("input", { value: s.tmux ?? "", placeholder: "e.g. work (empty for a plain shell)", spellcheck: "false" });
 
   const read = (): SavedSession => ({
     ...s,
     environment: env.value as Environment,
     tags: parseTags(tags.value),
+    tmux: tmux.value.trim(),
     name: name.value.trim(),
     folder: folder.value.trim().replace(/^\/+|\/+$/g, ""),
     host: host.value.trim(),
@@ -1175,6 +1184,7 @@ async function editSession(existing?: Partial<SavedSession>) {
       ),
       keyField,
       jumpField,
+      field("tmux session", tmux, "Attach to this tmux session on the server when connecting, creating it if needed, so programs keep running if the connection drops. Uses a plain shell if tmux isn't installed. GhostKey never closes tmux sessions."),
       autoRow,
       logRow,
       logHint,
@@ -1194,7 +1204,7 @@ async function editSession(existing?: Partial<SavedSession>) {
       if (!Number.isInteger(v.port) || v.port < 1 || v.port > 65535) return "Port must be between 1 and 65535.";
       if (!v.username) return "Enter a username.";
       if (v.auth === "key" && !v.keyPath) return "Choose a key file.";
-      return null;
+      return tmuxNameProblem(v.tmux);
     },
   }).result;
 
@@ -1235,7 +1245,7 @@ $("quick-connect").addEventListener("submit", (e) => {
   }
   const title = `${parsed.user}@${parsed.host}`;
   openSession(
-    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jumps: [] },
+    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jumps: [], tmux: null },
     title,
   );
 });
@@ -1482,6 +1492,221 @@ async function importProfile() {
   await confirm(failed.length ? "Profile partly imported" : "Profile imported", `${done} ${done === 1 ? "item" : "items"} added or updated.${failed.length ? `\n\nNot imported:\n${failed.join("\n")}` : ""}`, "OK");
 }
 
+// ---------------------------------------------------------------- evidence bookmarks
+
+const MAX_EXCERPT = 256 * 1024;
+
+/** Saves the active pane's selection with a note and where it came from. */
+async function bookmarkSelection() {
+  const pane = activePane();
+  const text = pane.selectedText();
+  if (!text) {
+    await confirm("Bookmark selection", "Select some text in the terminal first, then bookmark it.", "OK");
+    return;
+  }
+  const req = pane.conn.request;
+  const saved = savedFor(pane);
+  const source = {
+    name: saved?.name ?? (req ? pane.conn.title : "Not connected"),
+    username: req?.username ?? "",
+    host: req?.host ?? "",
+    port: req?.port ?? 22,
+    sessionId: saved?.id ?? null,
+    environment: saved?.environment ?? "",
+  };
+  const createdAt = new Date().toISOString();
+  const tooLong = new TextEncoder().encode(text).length > MAX_EXCERPT;
+  const note = el("textarea", { rows: "3", placeholder: "What this shows", spellcheck: "true" });
+  const ok = await showModal<boolean>({
+    title: "Bookmark selection",
+    wide: true,
+    body: [
+      el("p", { class: "hint", text: `${source.name}${req ? ` (${source.username}@${source.host})` : ""} · ${new Date(createdAt).toLocaleString()}` }),
+      el("pre", { class: "bookmark-excerpt", text }),
+      field("Note", note),
+      el("p", { class: "hint", text: "The excerpt is saved exactly as selected, even after it scrolls out of the terminal. It can include secrets that were on screen; you can make a redacted copy for export in Edit → Bookmarks." }),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save bookmark", value: () => true, primary: true },
+    ],
+    validate: () => (tooLong ? "The selection is too long to bookmark (at most 256 KB)." : null),
+    onDismiss: () => false,
+  }).result;
+  if (ok) {
+    try {
+      await api.saveBookmark({ id: crypto.randomUUID(), createdAt, source, note: note.value, original: text, redacted: null });
+    } catch (e) {
+      await confirm("Couldn't save the bookmark", String(e), "OK");
+    }
+  }
+  pane.focus();
+}
+
+/** Edits a bookmark's note and redacted copy. The original stays as it was. */
+async function editBookmark(b: Bookmark): Promise<boolean> {
+  const note = el("textarea", { rows: "3", spellcheck: "true" });
+  note.value = b.note;
+  const redacted = el("textarea", { rows: "8", class: "bookmark-redacted", spellcheck: "false" });
+  redacted.value = b.redacted ?? b.original;
+  const suggest = el("button", { class: "btn", type: "button", text: "Suggest redactions" });
+  suggest.addEventListener("click", () => (redacted.value = suggestRedaction(redacted.value)));
+  const ok = await showModal<boolean>({
+    title: "Edit bookmark",
+    wide: true,
+    body: [
+      field("Note", note),
+      el("p", { class: "hint", text: "Original (kept unchanged):" }),
+      el("pre", { class: "bookmark-excerpt", text: b.original }),
+      field("Redacted copy, used when you export redacted", redacted, "Edit it by hand. Suggestions hide values after words like password or token, bearer tokens and private keys; check what's left."),
+      el("div", {}, suggest),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+  }).result;
+  if (!ok) return false;
+  const copy = redacted.value === b.original ? null : redacted.value;
+  try {
+    await api.saveBookmark({ ...b, note: note.value, redacted: copy });
+    return true;
+  } catch (e) {
+    await confirm("Couldn't save the bookmark", String(e), "OK");
+    return false;
+  }
+}
+
+async function openBookmarks() {
+  let list: Bookmark[];
+  try {
+    list = await api.listBookmarks();
+  } catch (e) {
+    await confirm("Couldn't read bookmarks", String(e), "OK");
+    return;
+  }
+  if (!list.length) {
+    await confirm("Bookmarks", "No bookmarks yet. Select text in a terminal and press Ctrl+Shift+M (or Edit → Bookmark selection…).", "OK");
+    return;
+  }
+  const chosen = new Set(list.map((b) => b.id));
+  const box = el("div", { class: "bookmark-list" });
+  const render = () => {
+    box.replaceChildren();
+    for (const b of [...list].reverse()) {
+      const [pickRow, pick] = checkbox(`${b.source.name} · ${new Date(b.createdAt).toLocaleString()}${b.redacted !== null ? " · redacted copy made" : ""}`, chosen.has(b.id));
+      pick.addEventListener("change", () => (pick.checked ? chosen.add(b.id) : chosen.delete(b.id)));
+      const edit = el("button", { class: "btn", type: "button", text: "Edit…" });
+      const del = el("button", { class: "btn danger", type: "button", text: "Delete" });
+      edit.addEventListener("click", async () => {
+        if (await editBookmark(b)) {
+          list = await api.listBookmarks().catch(() => list);
+          render();
+        }
+      });
+      del.addEventListener("click", async () => {
+        if (!(await confirm("Delete bookmark", "Delete this bookmark? Its excerpt and note can't be recovered.", "Delete", true))) return;
+        await api.deleteBookmark(b.id).catch((e) => confirm("Couldn't delete the bookmark", String(e), "OK"));
+        list = list.filter((x) => x.id !== b.id);
+        chosen.delete(b.id);
+        render();
+      });
+      const preview = b.original.split("\n").slice(0, 3).join("\n");
+      box.append(
+        el(
+          "div",
+          { class: "bookmark-item" },
+          el("div", { class: "bookmark-head" }, pickRow, el("span", { class: "bookmark-actions" }, edit, del)),
+          ...(b.note.trim() ? [el("p", { class: "bookmark-note", text: b.note })] : []),
+          el("pre", { class: "bookmark-excerpt short", text: preview }),
+        ),
+      );
+    }
+  };
+  render();
+  const format = select([{ label: "Markdown (.md)", value: "md" }, { label: "JSON (.json)", value: "json" }], "md");
+  const [redRow, useRedacted] = checkbox("Use redacted copies where I made them", true);
+  const choice = await showModal<"close" | "export">({
+    title: "Bookmarks",
+    wide: true,
+    body: [
+      box,
+      el("div", { class: "grid" }, field("Export as", format), el("div", { class: "import-choose" }, redRow)),
+      el("p", { class: "hint", text: `${NOT_FORENSIC} Bookmarks are kept in bookmarks.json in the app folder, readable only by you.` }),
+    ],
+    buttons: [
+      { label: "Close", value: () => "close" },
+      { label: "Export chosen…", value: () => "export", primary: true },
+    ],
+    validate: () => (chosen.size ? null : "Tick at least one bookmark to export."),
+    onDismiss: () => "close",
+  }).result;
+  if (choice !== "export") return;
+  const picked = list.filter((b) => chosen.has(b.id));
+  const ext = format.value === "json" ? "json" : "md";
+  const path = await saveFileDialog({ title: "Export bookmarks", defaultPath: `ghostkey-bookmarks.${ext}`, filters: [{ name: ext === "json" ? "JSON" : "Markdown", extensions: [ext] }] });
+  if (!path) return;
+  const opts = { redacted: useRedacted.checked };
+  try {
+    await api.writeTextFile(path, ext === "json" ? toJson(picked, opts) : toMarkdown(picked, opts));
+    await confirm("Bookmarks exported", `${picked.length} ${picked.length === 1 ? "bookmark" : "bookmarks"} saved to ${path}.`, "OK");
+  } catch (e) {
+    await confirm("Couldn't export bookmarks", String(e), "OK");
+  }
+}
+
+// ---------------------------------------------------------------- tmux
+
+/** Lists the server's tmux sessions and opens the chosen one in a new tab. Never kills any. */
+async function openTmux() {
+  const pane = activePane();
+  const id = pane.conn.id;
+  const req = pane.conn.request;
+  if (id == null || !req) return;
+  let list;
+  try {
+    list = await api.listTmux(id);
+  } catch (e) {
+    await confirm("Couldn't list tmux sessions", String(e), "OK");
+    return;
+  }
+  if (!list.installed) {
+    await confirm("tmux sessions", `tmux isn't installed on ${pane.conn.title}, so there's nothing to attach to. Ordinary sessions still work.`, "OK");
+    return;
+  }
+  let picked: string | null = null;
+  const rows = list.sessions.map((s) => {
+    const open = el("button", { class: "btn", type: "button", text: "Open in new tab" });
+    open.addEventListener("click", () => {
+      picked = s.name;
+      close();
+    });
+    return el("div", { class: "tmux-row" }, el("div", {}, el("strong", { text: s.name }), el("small", { class: "hint", text: describeTmux(s) })), open);
+  });
+  const name = el("input", { placeholder: "new session name", spellcheck: "false", "aria-label": "New tmux session name" });
+  const { result, close } = showModal<"cancel" | "new">({
+    title: `tmux on ${pane.conn.title}`,
+    wide: true,
+    body: [
+      rows.length ? el("div", { class: "tmux-list" }, ...rows) : el("p", { class: "empty", text: "No tmux sessions are running." }),
+      field("Or start a new one", name, "Letters, digits, - and _. If it already exists, you attach to it."),
+      el("p", { class: "hint", text: "Attaching to a session someone else is using shares it: they see what you type, and you see their screen. Closing the tab detaches; the session keeps running until it's ended on the server." }),
+    ],
+    buttons: [
+      { label: "Close", value: () => "cancel" },
+      { label: "Start new session", value: () => "new", primary: true },
+    ],
+    validate: () => (name.value.trim() ? tmuxNameProblem(name.value.trim()) : "Enter a name, or open a session from the list."),
+    onDismiss: () => "cancel",
+  });
+  const choice = await result;
+  const target = picked ?? (choice === "new" ? name.value.trim() : null);
+  if (!target) return;
+  const tab = newTab();
+  tab.conn.connect({ ...req, log: false, forwards: [], tmux: target }, `${pane.conn.title} · tmux ${target}`);
+}
+
 // ---------------------------------------------------------------- menu bar
 
 const REPO_URL = "https://github.com/Anon0ne/GhostKey";
@@ -1516,6 +1741,7 @@ async function showShortcuts() {
     ["Ctrl+Shift+L", "Start or stop the session log"],
     ["Ctrl+Shift+B", "Show or hide the session list"],
     ["Ctrl+Shift+I", "Broadcast input to several terminals, or stop"],
+    ["Ctrl+Shift+M", "Bookmark the selected text as evidence"],
     ["Ctrl+= / - / 0", "Font size"],
     ["Ctrl+,", "Settings"],
     ["F10", "Open the menu bar (outside the terminal)"],
@@ -1570,12 +1796,15 @@ const menus: Menu[] = [
   {
     label: "Edit",
     items: [
-      { label: "Copy", shortcut: "Ctrl+Shift+C", run: () => activePane().copy(), enabled: () => activePane().term.hasSelection() },
+      { label: "Copy", shortcut: "Ctrl+Shift+C", run: () => activePane().copy(), enabled: () => !!activePane().selectedText() },
       { label: "Paste", shortcut: "Ctrl+Shift+V", run: () => void activePane().paste(), enabled: () => conn().online },
       { label: "Select all", run: () => activePane().term.selectAll() },
       "-",
       { label: "Find…", shortcut: "Ctrl+Shift+F", run: () => activePane().openSearch() },
       { label: "Snippets…", shortcut: "Ctrl+Shift+S", run: () => openSnippets() },
+      "-",
+      { label: "Bookmark selection…", shortcut: "Ctrl+Shift+M", run: () => void bookmarkSelection(), enabled: () => !!activePane().selectedText() },
+      { label: "Bookmarks…", run: () => void openBookmarks() },
     ],
   },
   {
@@ -1606,6 +1835,7 @@ const menus: Menu[] = [
       { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles() },
       { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online },
       { label: "Connection diagnostics…", run: () => void showDiagnostics() },
+      { label: "tmux sessions…", run: () => void openTmux(), enabled: () => conn().online },
       "-",
       { label: "Broadcast input…", shortcut: "Ctrl+Shift+I", run: () => void chooseBroadcast() },
       { label: "Stop broadcasting", run: stopBroadcast, enabled: () => broadcast.on },

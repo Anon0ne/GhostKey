@@ -46,6 +46,7 @@ let promptQueue: Promise<void> = Promise.resolve();
 let nextPaneId = 1;
 
 export class Pane {
+  private lastSelection = "";
   readonly key = nextPaneId++;
   readonly el: HTMLElement;
   readonly term: Terminal;
@@ -151,7 +152,14 @@ export class Pane {
     });
 
     this.term.onData((data) => this.send(data));
+    // Programs like tmux and vim ask for focus reports, and xterm.js clears the
+    // selection when it sends one, so a menu would find nothing selected. The
+    // selection is remembered until the user types or clicks in the terminal
+    // (not on the terminal's own replies to the program, which also arrive as data).
+    this.term.onKey?.(() => (this.lastSelection = ""));
+    this.el.addEventListener("mousedown", () => (this.lastSelection = ""), true);
     this.term.onSelectionChange?.(() => {
+      if (this.term.hasSelection()) this.lastSelection = this.term.getSelection();
       if (host.copyOnSelect?.() && this.term.hasSelection()) void Promise.resolve(writeText(this.term.getSelection())).catch(() => {});
     });
     this.term.onResize(({ cols, rows }) => this.conn.resize(cols, rows));
@@ -222,8 +230,14 @@ export class Pane {
     this.term.writeln(ansi.dim("  From a workspace. Not connected yet: press Connect above when you're ready."));
   }
 
+  /** The selected text, including a selection the terminal dropped when focus moved to a menu. */
+  selectedText(): string {
+    return this.term.getSelection() || this.lastSelection;
+  }
+
   copy() {
-    if (this.term.hasSelection()) writeText(this.term.getSelection());
+    const text = this.selectedText();
+    if (text) writeText(text);
   }
 
   async paste() {
