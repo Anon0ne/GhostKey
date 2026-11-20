@@ -18,6 +18,8 @@ export interface Prefs {
   defaultPort: number;
   /** Reconnect on its own when a connection drops, e.g. after sleep or a network change. */
   autoReconnect: boolean;
+  /** Program for File → New local terminal; empty for the system's default shell. */
+  localShell: string;
 }
 
 export const MIN_FONT_SIZE = 9;
@@ -49,6 +51,7 @@ export const DEFAULT_PREFS: Prefs = {
   defaultUser: "",
   defaultPort: 22,
   autoReconnect: true,
+  localShell: "",
 };
 
 function int(v: unknown, min: number, max: number, fallback: number): number {
@@ -77,6 +80,7 @@ export function normalizePrefs(raw: unknown, themes: string[]): Prefs {
     defaultUser: typeof r.defaultUser === "string" ? r.defaultUser.trim().slice(0, 64) : d.defaultUser,
     defaultPort: int(r.defaultPort, 1, 65535, d.defaultPort),
     autoReconnect: bool(r.autoReconnect, d.autoReconnect),
+    localShell: typeof r.localShell === "string" ? r.localShell.trim().slice(0, 512) : d.localShell,
   };
 }
 

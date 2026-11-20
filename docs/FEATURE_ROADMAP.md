@@ -48,11 +48,11 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
 | F16 | Evidence bookmarks | In progress | Claude | `tmux-bookmarks` | Selection + note + source + time, immutable original with redacted copy, Markdown/JSON export; awaiting review |
 | F17 | Portable session profiles | In progress | Claude | `profiles-workspaces` | Versioned JSON (`ghostkey-profile` v1) of sessions, snippets, workspaces; no secrets; awaiting review |
-| F18 | Local terminal tabs | Planned | Claude (beta queue) | — | Define local PTY lifecycle on both platforms |
+| F18 | Local terminal tabs | In review | Claude | `local-serial` | Windows ConPTY untested here (no Windows box) |
 | F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
 | F20 | Session tags | In progress | Claude | `session-tags` | Tags beside folders, searchable with #tag; awaiting review |
 | F21 | Auto-update | Planned | Claude (beta queue) | — | Tauri updater against GitHub releases; needs a signing key |
-| F22 | Serial and Telnet connections | Planned | Claude (beta queue) | — | Serial ports and Telnet as session types |
+| F22 | Serial and Telnet connections | In review | Claude | `local-serial` | Tested with a PTY standing in for a device; needs a real USB console cable |
 
 ## Feature definitions and acceptance criteria
 
@@ -520,3 +520,21 @@ Copy this block into a dated entry below when starting or stopping work:
     the terminal, because xterm.js clears the selection when it sends a focus report (tmux
     and vim ask for those), which made Edit menu actions find nothing selected. Dialogs now
     focus a textarea when it's the first field.
+  - F18 + F22 on `local-serial`: `ConnectRequest.protocol` (`ssh` default | `telnet` |
+    `serial` | `local`) is dispatched at the top of `ssh::run` into `src-tauri/src/ssh/plain.rs`,
+    which reuses `ConnCmd`/`ConnEvent`, so panes, logging, Find, broadcast and reconnect work
+    unchanged; `OpenSftp` and `ListTmux` answer that they need SSH. Local uses `portable-pty`
+    (ConPTY on Windows) with `TERM=xterm-256color`, home as cwd, `ConnectRequest.shell` or the
+    default (PowerShell on Windows, `$SHELL` login shell elsewhere), and kills the child on
+    close. Serial uses `serialport` (default features off, so no libudev) with
+    `SerialSettings {path, baud, dataBits, parity, stopBits, flow}` checked by `check()`;
+    `serial_ports` lists ports. Telnet answers option negotiation (accepts ECHO and SGA,
+    offers NAWS with resize updates and TTYPE `XTERM-256COLOR`, refuses the rest), escapes
+    IAC and sends CR as CR LF. `SavedSession` gains `protocol` and `serial`; local terminals
+    are never saved. Frontend: `src/protocols.ts` (labels, `serialProblem`, import cleaning),
+    File → New local terminal (Ctrl+Shift+N) with Settings → Local shell, a Type select in the
+    session editor that hides SSH-only fields and warns about Telnet, Files/Tunnels/tmux
+    hidden on non-SSH panes, only SSH sessions offered as jump hosts, splits of a serial pane
+    open empty (a port opens once). Profiles carry both. Live tests
+    `local_terminal_runs_a_shell_and_ends_with_it`, `serial_terminal_talks_to_a_device` and
+    `telnet_terminal_negotiates_and_relays`.

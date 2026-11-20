@@ -7,6 +7,7 @@ import type { SavedSession } from "./api";
 import type { Snippet } from "./snippets";
 import { cleanWorkspace, type Workspace } from "./workspace";
 import { parseTags } from "./hostLabels";
+import { normalizeProtocol, normalizeSerial } from "./protocols";
 
 export const PROFILE_FORMAT = "ghostkey-profile";
 export const PROFILE_VERSION = 1;
@@ -56,6 +57,8 @@ export function buildProfile(
       tags: s.tags ?? [],
       environment: s.environment ?? "",
       tmux: s.tmux ?? "",
+      protocol: s.protocol ?? "ssh",
+      serial: s.serial ?? null,
     })),
     snippets: data.snippets.map((s) => ({ id: s.id, name: s.name, group: s.group, command: s.command, run: s.run, favorite: s.favorite })),
     workspaces: data.workspaces,
@@ -74,32 +77,42 @@ function cleanSession(raw: unknown): SavedSession | string {
   const name = str(r.name)?.trim() || "";
   const host = str(r.host)?.trim() || "";
   const username = str(r.username)?.trim() || "";
-  const port = typeof r.port === "number" && Number.isInteger(r.port) && r.port >= 1 && r.port <= 65535 ? r.port : null;
+  let port = typeof r.port === "number" && Number.isInteger(r.port) && r.port >= 1 && r.port <= 65535 ? r.port : null;
   if (typeof r.id !== "string" || !UUID.test(r.id)) return `${name || "A session"}: missing or bad id`;
   if (!name) return "A session has no name";
-  if (!host || /\s/.test(host)) return `${name}: bad host`;
-  if (!username) return `${name}: no username`;
-  if (port === null) return `${name}: bad port`;
+  const protocol = normalizeProtocol(r.protocol);
+  const serial = protocol === "serial" ? normalizeSerial(r.serial) : null;
+  if (protocol === "serial") {
+    if (!serial) return `${name}: bad serial port settings`;
+    port = 0;
+  } else {
+    if (!host || /\s/.test(host)) return `${name}: bad host`;
+    if (protocol === "ssh" && !username) return `${name}: no username`;
+    if (port === null) return `${name}: bad port`;
+  }
+  const ssh = protocol === "ssh";
   const auth = r.auth === "key" || r.auth === "agent" ? r.auth : "password";
   const keyPath = str(r.keyPath)?.trim() || null;
-  if (auth === "key" && !keyPath) return `${name}: key login without a key file`;
+  if (ssh && auth === "key" && !keyPath) return `${name}: key login without a key file`;
   const env = r.environment;
   return {
     id: r.id,
     name,
     folder: str(r.folder)?.trim().replace(/^\/+|\/+$/g, "") ?? "",
-    host,
+    host: protocol === "serial" ? "" : host,
     port,
     username,
     auth,
     keyPath: auth === "key" ? keyPath : null,
     autoOpenTailscale: r.autoOpenTailscale === true,
     autoLog: r.autoLog === true,
-    forwards: Array.isArray(r.forwards) ? (r.forwards as SavedSession["forwards"]) : [],
-    jumpSession: typeof r.jumpSession === "string" && UUID.test(r.jumpSession) ? r.jumpSession : null,
+    forwards: ssh && Array.isArray(r.forwards) ? (r.forwards as SavedSession["forwards"]) : [],
+    jumpSession: ssh && typeof r.jumpSession === "string" && UUID.test(r.jumpSession) ? r.jumpSession : null,
     tags: Array.isArray(r.tags) ? parseTags(r.tags.filter((t) => typeof t === "string").join(" ")) : [],
     environment: env === "production" || env === "staging" || env === "development" || env === "lab" ? env : "",
-    tmux: typeof r.tmux === "string" && /^[A-Za-z0-9_@+=-]{1,64}$/.test(r.tmux) ? r.tmux : "",
+    tmux: ssh && typeof r.tmux === "string" && /^[A-Za-z0-9_@+=-]{1,64}$/.test(r.tmux) ? r.tmux : "",
+    protocol,
+    serial,
   };
 }
 

@@ -26,6 +26,7 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **Broadcast input (new):** type into several terminals at once, across tabs. Choose them in **Session → Broadcast input…** or with Ctrl+Shift+I. A yellow bar lists every terminal in the group and each one gets an outline. Pastes and snippets show every destination before anything is sent. A terminal that disconnects or reconnects leaves the group, so a new connection never joins without being chosen, and login prompts are never broadcast.
 - **tmux (new):** give a saved session a tmux session name and it attaches to that session on connect, creating it if needed, so programs keep running when the connection drops and a reconnect picks up where you were. **Session → tmux sessions…** lists what's running on the server and opens one in a new tab, or starts a new one. Without tmux on the server you get an ordinary shell. Names are checked and quoted, and GhostKey never ends a tmux session; closing the tab only detaches.
 - **Evidence bookmarks (new):** select text and press Ctrl+Shift+M (or **Edit → Bookmark selection…**) to keep it with a note, the session it came from and the time. The excerpt is kept as selected, even after it scrolls away. **Edit → Bookmarks…** lists them, lets you make a redacted copy beside the untouched original (with suggestions for passwords, tokens and keys), and exports the ones you tick as Markdown or JSON. Exports say which excerpts are redacted copies and that this isn't a forensic record. Bookmarks are stored in `bookmarks.json`, readable only by you.
+- **Local terminal, Telnet and serial (new):** **File → New local terminal** (Ctrl+Shift+N) opens a shell on this computer in a tab: PowerShell on Windows, your login shell elsewhere, or any program you set in **Settings → Terminal → Local shell** (such as `pwsh`, `cmd.exe` or `wsl.exe`). Splitting it opens another local shell. In **New session**, set **Type** to **Telnet** for old switches and routers (the editor warns that Telnet sends passwords as plain text) or to **Serial port** for a console cable: pick the port (GhostKey lists the ones it finds), the speed and the line settings (data bits, parity, stop bits, flow control). These terminals get logging, Find, snippets, broadcast and bookmarks like SSH ones; files, tunnels and tmux need SSH, so they're hidden there.
 - **Workspaces (new):** **File → Save workspace…** keeps your tabs and splits under a name, with the saved session each pane uses. **File → Open workspace…** shows every pane first and opens the layout in new tabs. Only the panes you tick connect; the rest wait with a **Connect** button, and production sessions start unticked. A workspace holds no passwords or commands.
 - **Profiles (new):** **File → Export profile…** saves your sessions, snippets and workspaces to one JSON file, and **Import profile…** brings them in on another computer. Before importing you see what's new, what differs from yours and what's already the same; your own versions are kept unless you choose to replace them, and nothing is deleted. Passwords and passphrases are never exported, and key paths under your home folder are written as `~/…`. Key files themselves aren't copied.
 - **Menu bar and Settings (new):** File, Edit, View, Session and Help menus across the top, like a normal desktop program. **File → Settings** (Ctrl+,) picks the theme (Kali Dark, Kali Light, Dracula, Solarized Dark, High contrast), font and size, cursor, scrollback, copy on select, a default user and port for Quick connect, and the log folder. Changes show as you make them, and Cancel puts them back. **View** hides the session list (Ctrl+Shift+B) or the snippet bar.
@@ -54,6 +55,10 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 | --- | --- | --- |
 | ![Logging in through two jump hosts in turn](docs/screenshots/multi-hop.png) | ![tmux sessions on the server](docs/screenshots/tmux.png) | ![A bookmark's original and redacted copy](docs/screenshots/bookmarks.png) |
 
+| Local terminals | Serial session settings | Serial console |
+| --- | --- | --- |
+| ![Two local shells side by side](docs/screenshots/local-terminal.png) | ![Choosing a serial port, speed and line settings](docs/screenshots/serial-editor.png) | ![Talking to a device over a serial port](docs/screenshots/serial.png) |
+
 ## Install the alpha
 
 Every push builds installers in GitHub Actions. Open the latest **CI** run on the [Actions tab](../../actions), scroll down to **Artifacts**, and download:
@@ -70,6 +75,7 @@ Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the 
 | Keys | Action |
 | --- | --- |
 | Ctrl+Shift+T | New tab |
+| Ctrl+Shift+N | New local terminal |
 | Ctrl+Shift+W | Close the focused pane |
 | Ctrl+Shift+R / Ctrl+Shift+D | Split right / split down |
 | Alt+Arrow keys | Move between panes |

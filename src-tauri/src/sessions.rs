@@ -57,6 +57,12 @@ pub struct SavedSession {
     /// tmux session to attach to (or create) on connect. Empty means a plain shell.
     #[serde(default)]
     pub tmux: String,
+    /// SSH unless set to Telnet or a serial port.
+    #[serde(default)]
+    pub protocol: crate::ssh::Protocol,
+    /// The port and line settings of a serial session.
+    #[serde(default)]
+    pub serial: Option<crate::ssh::SerialSettings>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,8 +185,28 @@ impl SessionStore {
 }
 
 fn validate(s: &SavedSession) -> anyhow::Result<()> {
+    use crate::ssh::Protocol;
     if s.name.trim().is_empty() {
         anyhow::bail!("Session name is required");
+    }
+    match s.protocol {
+        Protocol::Ssh => {}
+        Protocol::Local => anyhow::bail!("Local terminals aren't saved as sessions"),
+        Protocol::Serial => {
+            return match &s.serial {
+                Some(serial) => serial.check(),
+                None => anyhow::bail!("Choose a serial port"),
+            };
+        }
+        Protocol::Telnet => {
+            if s.host.trim().is_empty() || s.host.chars().any(char::is_whitespace) {
+                anyhow::bail!("Host is required and can't contain spaces");
+            }
+            if s.port == 0 {
+                anyhow::bail!("Port must be between 1 and 65535");
+            }
+            return Ok(());
+        }
     }
     if s.host.trim().is_empty() || s.host.chars().any(char::is_whitespace) {
         anyhow::bail!("Host is required and can't contain spaces");
@@ -221,6 +247,8 @@ mod tests {
             tags: Vec::new(),
             environment: Environment::None,
             tmux: String::new(),
+            protocol: crate::ssh::Protocol::Ssh,
+            serial: None,
         }
     }
 
@@ -280,6 +308,32 @@ mod tests {
 
         store.delete(b.id).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn telnet_and_serial_sessions_need_only_their_own_fields() {
+        use crate::ssh::{Protocol, SerialSettings};
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions.json"));
+        let mut t = sample("switch", "");
+        t.protocol = Protocol::Telnet;
+        t.username = String::new();
+        t.port = 23;
+        store.save(t.clone()).unwrap();
+        let mut s = sample("console", "");
+        s.protocol = Protocol::Serial;
+        s.host = String::new();
+        s.username = String::new();
+        assert!(store.save(s.clone()).is_err(), "serial without a port");
+        s.serial = Some(serde_json::from_str(r#"{"path":"/dev/ttyUSB0","baud":9600}"#).unwrap());
+        store.save(s.clone()).unwrap();
+        let got = store.get(s.id).unwrap().unwrap();
+        let serial: &SerialSettings = got.serial.as_ref().unwrap();
+        assert_eq!((serial.data_bits, serial.stop_bits), (8, 1));
+        assert_eq!(store.get(t.id).unwrap().unwrap().protocol, Protocol::Telnet);
+        let mut local = sample("x", "");
+        local.protocol = Protocol::Local;
+        assert!(store.save(local).is_err());
     }
 
     #[test]

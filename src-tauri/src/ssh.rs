@@ -24,6 +24,9 @@ use crate::logging::LineLog;
 use crate::secrets::{self, SecretKind};
 use crate::sessions::AuthMethod;
 
+mod plain;
+pub use plain::{list_serial_ports, Protocol, SerialSettings};
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_ATTEMPTS: usize = 3;
 
@@ -55,6 +58,15 @@ pub struct ConnectRequest {
     /// Attach to (or create) this tmux session instead of starting a plain shell.
     #[serde(default)]
     pub tmux: Option<String>,
+    /// SSH unless set: Telnet, a serial port, or a shell on this computer.
+    #[serde(default)]
+    pub protocol: Protocol,
+    /// For a local terminal: the program to run instead of the default shell.
+    #[serde(default)]
+    pub shell: Option<String>,
+    /// For a serial terminal: the port and line settings.
+    #[serde(default)]
+    pub serial: Option<SerialSettings>,
     pub cols: u32,
     pub rows: u32,
 }
@@ -486,6 +498,9 @@ impl ConnCtx {
                 forwards: Vec::new(),
                 jumps: Vec::new(),
                 tmux: None,
+                protocol: Protocol::Ssh,
+                shell: None,
+                serial: None,
                 cols: self.req.cols,
                 rows: self.req.rows,
             },
@@ -793,6 +808,12 @@ where
 }
 
 async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow::Result<Ended> {
+    match ctx.req.protocol {
+        Protocol::Ssh => {}
+        Protocol::Local => return plain::run_local(&ctx, &mut cmds).await,
+        Protocol::Serial => return plain::run_serial(&ctx, &mut cmds).await,
+        Protocol::Telnet => return plain::run_telnet(&ctx, &mut cmds).await,
+    }
     let req = ctx.req.clone();
     let remote: RemoteTargets = Arc::default();
 
@@ -1361,6 +1382,9 @@ mod live {
             forwards: Vec::new(),
             jumps: Vec::new(),
             tmux,
+            protocol: Protocol::Ssh,
+            shell: None,
+            serial: None,
             cols: 80,
             rows: 24,
         };
@@ -1767,6 +1791,179 @@ mod live {
         ssh.close(id);
     }
 
+    /// Starts a non-SSH terminal with `edit` applied to a blank request.
+    fn start_plain(
+        ssh: &Arc<Ssh>,
+        edit: impl FnOnce(&mut ConnectRequest),
+    ) -> (u32, UnboundedReceiver<Seen>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let tx2 = tx.clone();
+        let sinks = Sinks {
+            events: Arc::new(move |e| {
+                let _ = tx.send(Seen::Event(e));
+            }),
+            output: Arc::new(move |d| {
+                let _ = tx2.send(Seen::Output(d));
+            }),
+            open_url: Arc::new(|_| Ok(())),
+        };
+        let mut req = ConnectRequest {
+            session_id: None,
+            host: String::new(),
+            port: 0,
+            username: String::new(),
+            auth: AuthMethod::Password,
+            key_path: None,
+            auto_open_tailscale: false,
+            log: false,
+            label: String::new(),
+            forwards: Vec::new(),
+            jumps: Vec::new(),
+            tmux: None,
+            protocol: Protocol::Local,
+            shell: None,
+            serial: None,
+            cols: 80,
+            rows: 24,
+        };
+        edit(&mut req);
+        (ssh.connect(req, sinks), rx)
+    }
+
+    async fn wait_closed(rx: &mut UnboundedReceiver<Seen>) -> Option<String> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(Seen::Event(ConnEvent::Closed { error, .. }))) => return error,
+                Ok(Some(_)) => {}
+                _ => panic!("the terminal never closed"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_terminal_runs_a_shell_and_ends_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(dir.path().join("kh"), dir.path().join("logs")));
+        let (id, mut rx) = start_plain(&ssh, |r| r.shell = Some("/bin/sh".into()));
+        ssh.input(id, b"echo GK_$((40+2)) $TERM; stty size\n".to_vec());
+        expect_output(&mut rx, "GK_42 xterm-256color").await;
+        expect_output(&mut rx, "24 80").await;
+        ssh.resize(id, 100, 30);
+        ssh.input(id, b"stty size\n".to_vec());
+        expect_output(&mut rx, "30 100").await;
+        // Files and tmux need SSH, and say so instead of hanging.
+        assert!(ssh
+            .list_tmux(id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("needs SSH"));
+        ssh.input(id, b"exit\n".to_vec());
+        assert_eq!(wait_closed(&mut rx).await, None);
+
+        // Closing a running terminal ends its shell.
+        let (id, mut rx) = start_plain(&ssh, |r| r.shell = Some("/bin/sh".into()));
+        ssh.input(id, b"echo ready\n".to_vec());
+        expect_output(&mut rx, "ready").await;
+        ssh.close(id);
+        assert_eq!(wait_closed(&mut rx).await, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serial_terminal_talks_to_a_device() {
+        use portable_pty::PtySize;
+        use std::io::{Read, Write};
+        // A PTY stands in for the device: its other end is a tty that serial code can open.
+        let pair = portable_pty::native_pty_system()
+            .openpty(PtySize::default())
+            .unwrap();
+        let path = pair.master.tty_name().expect("pty path");
+        let mut device_out = pair.master.take_writer().unwrap();
+        let mut device_in = pair.master.try_clone_reader().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(dir.path().join("kh"), dir.path().join("logs")));
+        let (id, mut rx) = start_plain(&ssh, |r| {
+            r.protocol = Protocol::Serial;
+            r.serial = Some(SerialSettings {
+                path: path.display().to_string(),
+                baud: 115_200,
+                data_bits: 8,
+                parity: plain::Parity::None,
+                stop_bits: 1,
+                flow: plain::Flow::None,
+            });
+        });
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .unwrap()
+            {
+                Some(Seen::Event(ConnEvent::Connected)) => break,
+                Some(Seen::Event(ConnEvent::Closed { error, .. })) => panic!("{error:?}"),
+                _ => {}
+            }
+        }
+        device_out.write_all(b"router> ").unwrap();
+        expect_output(&mut rx, "router> ").await;
+        ssh.input(id, b"show version\r".to_vec());
+        let got = tokio::task::spawn_blocking(move || {
+            let mut all = Vec::new();
+            let mut buf = [0u8; 64];
+            while !String::from_utf8_lossy(&all).contains("show version") {
+                let n = device_in.read(&mut buf).unwrap();
+                all.extend_from_slice(&buf[..n]);
+            }
+            all
+        })
+        .await
+        .unwrap();
+        assert!(String::from_utf8_lossy(&got).contains("show version"));
+        ssh.close(id);
+        assert_eq!(wait_closed(&mut rx).await, None);
+    }
+
+    #[tokio::test]
+    async fn telnet_terminal_negotiates_and_relays() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            // IAC WILL ECHO, IAC DO NAWS, then a prompt.
+            s.write_all(&[255, 251, 1, 255, 253, 31]).await.unwrap();
+            s.write_all(b"login: ").await.unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 256];
+            while !got.ends_with(b"admin\r\n") {
+                let n = s.read(&mut buf).await.unwrap();
+                assert!(n > 0, "client closed early: {got:?}");
+                got.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(b"\r\nWelcome\r\n").await.unwrap();
+            got
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(dir.path().join("kh"), dir.path().join("logs")));
+        let (id, mut rx) = start_plain(&ssh, |r| {
+            r.protocol = Protocol::Telnet;
+            r.host = "127.0.0.1".into();
+            r.port = port;
+        });
+        expect_output(&mut rx, "login: ").await;
+        ssh.input(id, b"admin\r".to_vec());
+        expect_output(&mut rx, "Welcome").await;
+        let got = server.await.unwrap();
+        // The client agreed to echo and sent its 80x24 size before the login name.
+        assert!(
+            got.starts_with(&[255, 253, 1, 255, 251, 31, 255, 250, 31, 0, 80, 0, 24, 255, 240]),
+            "{got:?}"
+        );
+        assert!(wait_closed(&mut rx).await.is_none());
+    }
+
     /// Waits until the tunnel `id` reaches `state` and returns its status.
     async fn tunnel(
         rx: &mut UnboundedReceiver<Seen>,
@@ -2131,6 +2328,9 @@ mod live {
                 forwards: vec![local.clone()],
                 jumps: vec![hop.clone(), hop],
                 tmux: None,
+                protocol: Protocol::Ssh,
+                shell: None,
+                serial: None,
                 cols: 80,
                 rows: 24,
             },

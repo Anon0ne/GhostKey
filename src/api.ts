@@ -8,6 +8,7 @@ import type { Environment } from "./hostLabels";
 import type { Workspace } from "./workspace";
 import type { TmuxList } from "./tmux";
 import type { Bookmark } from "./bookmarks";
+import type { Protocol, SerialSettings } from "./protocols";
 
 export type AuthMethod = "password" | "key" | "agent";
 
@@ -31,6 +32,10 @@ export interface SavedSession {
   environment: Environment;
   /** tmux session to attach to on connect; empty for a plain shell. */
   tmux: string;
+  /** SSH unless set; older sessions don't have it. */
+  protocol?: Exclude<Protocol, "local">;
+  /** The port and line settings of a serial session. */
+  serial?: SerialSettings | null;
 }
 
 export interface JumpRequest {
@@ -60,6 +65,12 @@ export interface ConnectRequest {
   jumps: JumpRequest[];
   /** Attach to (or create) this tmux session instead of a plain shell. */
   tmux: string | null;
+  /** SSH unless set: Telnet, a serial port, or a shell on this computer. */
+  protocol?: Protocol;
+  /** For a local terminal: the program to run instead of the default shell. */
+  shell?: string | null;
+  /** For a serial terminal: the port and line settings. */
+  serial?: SerialSettings | null;
   cols: number;
   rows: number;
 }
@@ -162,6 +173,7 @@ export const api = {
   listBookmarks: () => invoke<Bookmark[]>("list_bookmarks"),
   saveBookmark: (bookmark: Bookmark) => invoke<void>("save_bookmark", { bookmark }),
   deleteBookmark: (id: string) => invoke<void>("delete_bookmark", { id }),
+  serialPorts: () => invoke<string[]>("serial_ports"),
   listTmux: (id: number) => invoke<TmuxList>("list_tmux", { id }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, text: string) => invoke<void>("write_text_file", { path, text }),

@@ -1018,6 +1018,26 @@ textarea.snippet-input:focus {
   grid-template-columns: 1fr 90px;
 }
 
+.serial-box > .hint {
+  display: block;
+  margin: 2px 0 8px;
+}
+
+.grid.three {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.modal p.warning {
+  color: var(--error);
+  border-left: 3px solid var(--error);
+  padding-left: 8px;
+  margin: 4px 0;
+}
+
+.modal [hidden] {
+  display: none !important;
+}
+
 .inline {
   display: flex;
   gap: 6px;
