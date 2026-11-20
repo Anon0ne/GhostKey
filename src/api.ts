@@ -7,6 +7,7 @@ import type { Stage } from "./diagnostics";
 import type { Environment } from "./hostLabels";
 import type { Workspace } from "./workspace";
 import type { TmuxList } from "./tmux";
+import type { Bookmark } from "./bookmarks";
 
 export type AuthMethod = "password" | "key" | "agent";
 
@@ -158,6 +159,9 @@ export const api = {
   listWorkspaces: () => invoke<unknown[]>("list_workspaces"),
   saveWorkspace: (workspace: Workspace) => invoke<void>("save_workspace", { workspace }),
   deleteWorkspace: (id: string) => invoke<void>("delete_workspace", { id }),
+  listBookmarks: () => invoke<Bookmark[]>("list_bookmarks"),
+  saveBookmark: (bookmark: Bookmark) => invoke<void>("save_bookmark", { bookmark }),
+  deleteBookmark: (id: string) => invoke<void>("delete_bookmark", { id }),
   listTmux: (id: number) => invoke<TmuxList>("list_tmux", { id }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, text: string) => invoke<void>("write_text_file", { path, text }),

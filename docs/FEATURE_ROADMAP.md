@@ -41,12 +41,12 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
 | F09 | Connection diagnostics | In progress | Claude | `diagnostics` | Stage events, failure advice, redacted copyable report; awaiting review |
 | F10 | Network recovery | In progress | Claude | `network-recovery` | Auto-reconnect with backoff, wake and network-change probes; awaiting review |
-| F11 | tmux integration | Planned | Claude (beta queue) | — | Define explicit attach/create flow |
+| F11 | tmux integration | In progress | Claude | `tmux-bookmarks` | Per-session tmux name (attach or create), server session list, never kills; awaiting review |
 | F12 | Workspace layouts | In progress | Claude | `profiles-workspaces` | Save/open tabs and splits by name; opening connects only ticked panes; awaiting review |
 | F13 | Host identity guardrails | In progress | Claude | `session-tags` | Environment badges in list/tab/toolbar, production warnings in snippets, paste and broadcast; awaiting review |
 | F14 | Searchable terminal history | In progress | Codex | `feature/paste-and-history` | Per-pane in-memory search implemented; review pending; persistent/all-pane history deferred |
 | F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
-| F16 | Evidence bookmarks | Planned | Claude (beta queue) | — | Define selection metadata and export format |
+| F16 | Evidence bookmarks | In progress | Claude | `tmux-bookmarks` | Selection + note + source + time, immutable original with redacted copy, Markdown/JSON export; awaiting review |
 | F17 | Portable session profiles | In progress | Claude | `profiles-workspaces` | Versioned JSON (`ghostkey-profile` v1) of sessions, snippets, workspaces; no secrets; awaiting review |
 | F18 | Local terminal tabs | Planned | Claude (beta queue) | — | Define local PTY lifecycle on both platforms |
 | F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
@@ -503,3 +503,20 @@ Copy this block into a dated entry below when starting or stopping work:
     progress covers the whole folder. View → Move pane to new tab / to tab… re-parents a live
     pane. Live tests: `tunnels_and_jump_host` now goes through two hops;
     `sftp_round_trip_overwrite_and_cancel` covers nested folders both ways.
+  - F11 + F16 on `tmux-bookmarks`: `ConnectRequest.tmux` / `SavedSession.tmux` (a name
+    checked by `tmux::valid_name`: letters, digits, `-_@+=`, at most 64). With a name, the
+    shell channel runs `tmux::attach_command` (`tmux new-session -A -s '<name>'`, falling back
+    to a login shell with a message when tmux is missing) instead of `request_shell`, so F10
+    reconnects reattach. `list_tmux` runs the fixed `tmux::LIST_COMMAND` on its own exec
+    channel (10 s, 256 KB) and parses tab-separated fields; Session → tmux sessions… opens
+    one in a new tab. Splits of a tmux pane open a plain shell. Nothing ever runs
+    `kill-session`. Live test `tmux_session_survives_a_disconnect` (CI now installs tmux).
+    F16: `src-tauri/src/bookmarks.rs` stores `bookmarks.json` (0600 on Unix, 256 KB per
+    excerpt, 5,000 bookmarks); updates change only the note and redacted copy, never the
+    original, source or time. `src/bookmarks.ts` suggests redactions and exports Markdown
+    (fence longer than any backtick run in the excerpt) or JSON (`ghostkey-bookmarks` v1,
+    `excerptVersion` per entry), both with a not-forensic notice. Times are bookmark times,
+    not print times. Panes remember the last selection until the user types or clicks in
+    the terminal, because xterm.js clears the selection when it sends a focus report (tmux
+    and vim ask for those), which made Edit menu actions find nothing selected. Dialogs now
+    focus a textarea when it's the first field.

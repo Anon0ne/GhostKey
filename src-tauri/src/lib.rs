@@ -1,3 +1,4 @@
+mod bookmarks;
 mod forward;
 mod hostkeys;
 mod import;
@@ -21,6 +22,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
+use bookmarks::{Bookmark, BookmarkStore};
 use sessions::{SavedSession, SessionStore};
 use sftp::{Listing, TransferEvent, Transfers};
 use snippets::{Snippet, SnippetStore};
@@ -52,6 +54,21 @@ fn list_snippets(store: State<'_, SnippetStore>) -> CmdResult<Vec<Snippet>> {
 #[tauri::command]
 fn save_snippet(store: State<'_, SnippetStore>, snippet: Snippet) -> CmdResult<()> {
     store.save(snippet).map_err(err)
+}
+
+#[tauri::command]
+fn list_bookmarks(store: State<'_, BookmarkStore>) -> CmdResult<Vec<Bookmark>> {
+    store.list().map_err(err)
+}
+
+#[tauri::command]
+fn save_bookmark(store: State<'_, BookmarkStore>, bookmark: Bookmark) -> CmdResult<()> {
+    store.save(bookmark).map_err(err)
+}
+
+#[tauri::command]
+fn delete_bookmark(store: State<'_, BookmarkStore>, id: Uuid) -> CmdResult<()> {
+    store.delete(id).map_err(err)
 }
 
 #[tauri::command]
@@ -448,6 +465,7 @@ pub fn run() {
             app.manage(SessionStore::new(dir.join("sessions.json")));
             app.manage(SnippetStore::new(dir.join("snippets.json")));
             app.manage(WorkspaceStore::new(dir.join("workspaces.json")));
+            app.manage(BookmarkStore::new(dir.join("bookmarks.json")));
             app.manage(Arc::new(Transfers::default()));
             app.manage(Arc::new(Ssh::new(dir.join("known_hosts"), state.log_dir())));
             app.manage(state);
@@ -465,6 +483,9 @@ pub fn run() {
             sftp_transfer,
             sftp_cancel,
             list_tmux,
+            list_bookmarks,
+            save_bookmark,
+            delete_bookmark,
             local_kind,
             default_download_dir,
             list_sessions,

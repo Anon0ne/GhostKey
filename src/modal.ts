@@ -99,7 +99,7 @@ export function showModal<T>(opts: {
   });
 
   root.append(backdrop);
-  const first = dialog.querySelector<HTMLElement>("input, select, button.primary");
+  const first = dialog.querySelector<HTMLElement>("input, select, textarea, button.primary");
   first?.focus();
   return { result, close: () => finish(opts.onDismiss()) };
 }

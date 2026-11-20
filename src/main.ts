@@ -25,6 +25,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
 import { jumpChain, jumpChoices, routeText } from "./jumps";
 import { describeTmux, tmuxNameProblem } from "./tmux";
+import { suggestRedaction, toJson, toMarkdown, NOT_FORENSIC, type Bookmark } from "./bookmarks";
 import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } from "./workspace";
 import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
@@ -437,6 +438,9 @@ function shortcut(e: KeyboardEvent): boolean {
       case "KeyI":
         if (broadcast.on) stopBroadcast();
         else void chooseBroadcast();
+        return true;
+      case "KeyM":
+        void bookmarkSelection();
         return true;
     }
   }
@@ -1488,6 +1492,170 @@ async function importProfile() {
   await confirm(failed.length ? "Profile partly imported" : "Profile imported", `${done} ${done === 1 ? "item" : "items"} added or updated.${failed.length ? `\n\nNot imported:\n${failed.join("\n")}` : ""}`, "OK");
 }
 
+// ---------------------------------------------------------------- evidence bookmarks
+
+const MAX_EXCERPT = 256 * 1024;
+
+/** Saves the active pane's selection with a note and where it came from. */
+async function bookmarkSelection() {
+  const pane = activePane();
+  const text = pane.selectedText();
+  if (!text) {
+    await confirm("Bookmark selection", "Select some text in the terminal first, then bookmark it.", "OK");
+    return;
+  }
+  const req = pane.conn.request;
+  const saved = savedFor(pane);
+  const source = {
+    name: saved?.name ?? (req ? pane.conn.title : "Not connected"),
+    username: req?.username ?? "",
+    host: req?.host ?? "",
+    port: req?.port ?? 22,
+    sessionId: saved?.id ?? null,
+    environment: saved?.environment ?? "",
+  };
+  const createdAt = new Date().toISOString();
+  const tooLong = new TextEncoder().encode(text).length > MAX_EXCERPT;
+  const note = el("textarea", { rows: "3", placeholder: "What this shows", spellcheck: "true" });
+  const ok = await showModal<boolean>({
+    title: "Bookmark selection",
+    wide: true,
+    body: [
+      el("p", { class: "hint", text: `${source.name}${req ? ` (${source.username}@${source.host})` : ""} · ${new Date(createdAt).toLocaleString()}` }),
+      el("pre", { class: "bookmark-excerpt", text }),
+      field("Note", note),
+      el("p", { class: "hint", text: "The excerpt is saved exactly as selected, even after it scrolls out of the terminal. It can include secrets that were on screen; you can make a redacted copy for export in Edit → Bookmarks." }),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save bookmark", value: () => true, primary: true },
+    ],
+    validate: () => (tooLong ? "The selection is too long to bookmark (at most 256 KB)." : null),
+    onDismiss: () => false,
+  }).result;
+  if (ok) {
+    try {
+      await api.saveBookmark({ id: crypto.randomUUID(), createdAt, source, note: note.value, original: text, redacted: null });
+    } catch (e) {
+      await confirm("Couldn't save the bookmark", String(e), "OK");
+    }
+  }
+  pane.focus();
+}
+
+/** Edits a bookmark's note and redacted copy. The original stays as it was. */
+async function editBookmark(b: Bookmark): Promise<boolean> {
+  const note = el("textarea", { rows: "3", spellcheck: "true" });
+  note.value = b.note;
+  const redacted = el("textarea", { rows: "8", class: "bookmark-redacted", spellcheck: "false" });
+  redacted.value = b.redacted ?? b.original;
+  const suggest = el("button", { class: "btn", type: "button", text: "Suggest redactions" });
+  suggest.addEventListener("click", () => (redacted.value = suggestRedaction(redacted.value)));
+  const ok = await showModal<boolean>({
+    title: "Edit bookmark",
+    wide: true,
+    body: [
+      field("Note", note),
+      el("p", { class: "hint", text: "Original (kept unchanged):" }),
+      el("pre", { class: "bookmark-excerpt", text: b.original }),
+      field("Redacted copy, used when you export redacted", redacted, "Edit it by hand. Suggestions hide values after words like password or token, bearer tokens and private keys; check what's left."),
+      el("div", {}, suggest),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+  }).result;
+  if (!ok) return false;
+  const copy = redacted.value === b.original ? null : redacted.value;
+  try {
+    await api.saveBookmark({ ...b, note: note.value, redacted: copy });
+    return true;
+  } catch (e) {
+    await confirm("Couldn't save the bookmark", String(e), "OK");
+    return false;
+  }
+}
+
+async function openBookmarks() {
+  let list: Bookmark[];
+  try {
+    list = await api.listBookmarks();
+  } catch (e) {
+    await confirm("Couldn't read bookmarks", String(e), "OK");
+    return;
+  }
+  if (!list.length) {
+    await confirm("Bookmarks", "No bookmarks yet. Select text in a terminal and press Ctrl+Shift+M (or Edit → Bookmark selection…).", "OK");
+    return;
+  }
+  const chosen = new Set(list.map((b) => b.id));
+  const box = el("div", { class: "bookmark-list" });
+  const render = () => {
+    box.replaceChildren();
+    for (const b of [...list].reverse()) {
+      const [pickRow, pick] = checkbox(`${b.source.name} · ${new Date(b.createdAt).toLocaleString()}${b.redacted !== null ? " · redacted copy made" : ""}`, chosen.has(b.id));
+      pick.addEventListener("change", () => (pick.checked ? chosen.add(b.id) : chosen.delete(b.id)));
+      const edit = el("button", { class: "btn", type: "button", text: "Edit…" });
+      const del = el("button", { class: "btn danger", type: "button", text: "Delete" });
+      edit.addEventListener("click", async () => {
+        if (await editBookmark(b)) {
+          list = await api.listBookmarks().catch(() => list);
+          render();
+        }
+      });
+      del.addEventListener("click", async () => {
+        if (!(await confirm("Delete bookmark", "Delete this bookmark? Its excerpt and note can't be recovered.", "Delete", true))) return;
+        await api.deleteBookmark(b.id).catch((e) => confirm("Couldn't delete the bookmark", String(e), "OK"));
+        list = list.filter((x) => x.id !== b.id);
+        chosen.delete(b.id);
+        render();
+      });
+      const preview = b.original.split("\n").slice(0, 3).join("\n");
+      box.append(
+        el(
+          "div",
+          { class: "bookmark-item" },
+          el("div", { class: "bookmark-head" }, pickRow, el("span", { class: "bookmark-actions" }, edit, del)),
+          ...(b.note.trim() ? [el("p", { class: "bookmark-note", text: b.note })] : []),
+          el("pre", { class: "bookmark-excerpt short", text: preview }),
+        ),
+      );
+    }
+  };
+  render();
+  const format = select([{ label: "Markdown (.md)", value: "md" }, { label: "JSON (.json)", value: "json" }], "md");
+  const [redRow, useRedacted] = checkbox("Use redacted copies where I made them", true);
+  const choice = await showModal<"close" | "export">({
+    title: "Bookmarks",
+    wide: true,
+    body: [
+      box,
+      el("div", { class: "grid" }, field("Export as", format), el("div", { class: "import-choose" }, redRow)),
+      el("p", { class: "hint", text: `${NOT_FORENSIC} Bookmarks are kept in bookmarks.json in the app folder, readable only by you.` }),
+    ],
+    buttons: [
+      { label: "Close", value: () => "close" },
+      { label: "Export chosen…", value: () => "export", primary: true },
+    ],
+    validate: () => (chosen.size ? null : "Tick at least one bookmark to export."),
+    onDismiss: () => "close",
+  }).result;
+  if (choice !== "export") return;
+  const picked = list.filter((b) => chosen.has(b.id));
+  const ext = format.value === "json" ? "json" : "md";
+  const path = await saveFileDialog({ title: "Export bookmarks", defaultPath: `ghostkey-bookmarks.${ext}`, filters: [{ name: ext === "json" ? "JSON" : "Markdown", extensions: [ext] }] });
+  if (!path) return;
+  const opts = { redacted: useRedacted.checked };
+  try {
+    await api.writeTextFile(path, ext === "json" ? toJson(picked, opts) : toMarkdown(picked, opts));
+    await confirm("Bookmarks exported", `${picked.length} ${picked.length === 1 ? "bookmark" : "bookmarks"} saved to ${path}.`, "OK");
+  } catch (e) {
+    await confirm("Couldn't export bookmarks", String(e), "OK");
+  }
+}
+
 // ---------------------------------------------------------------- tmux
 
 /** Lists the server's tmux sessions and opens the chosen one in a new tab. Never kills any. */
@@ -1573,6 +1741,7 @@ async function showShortcuts() {
     ["Ctrl+Shift+L", "Start or stop the session log"],
     ["Ctrl+Shift+B", "Show or hide the session list"],
     ["Ctrl+Shift+I", "Broadcast input to several terminals, or stop"],
+    ["Ctrl+Shift+M", "Bookmark the selected text as evidence"],
     ["Ctrl+= / - / 0", "Font size"],
     ["Ctrl+,", "Settings"],
     ["F10", "Open the menu bar (outside the terminal)"],
@@ -1627,12 +1796,15 @@ const menus: Menu[] = [
   {
     label: "Edit",
     items: [
-      { label: "Copy", shortcut: "Ctrl+Shift+C", run: () => activePane().copy(), enabled: () => activePane().term.hasSelection() },
+      { label: "Copy", shortcut: "Ctrl+Shift+C", run: () => activePane().copy(), enabled: () => !!activePane().selectedText() },
       { label: "Paste", shortcut: "Ctrl+Shift+V", run: () => void activePane().paste(), enabled: () => conn().online },
       { label: "Select all", run: () => activePane().term.selectAll() },
       "-",
       { label: "Find…", shortcut: "Ctrl+Shift+F", run: () => activePane().openSearch() },
       { label: "Snippets…", shortcut: "Ctrl+Shift+S", run: () => openSnippets() },
+      "-",
+      { label: "Bookmark selection…", shortcut: "Ctrl+Shift+M", run: () => void bookmarkSelection(), enabled: () => !!activePane().selectedText() },
+      { label: "Bookmarks…", run: () => void openBookmarks() },
     ],
   },
   {
