@@ -51,7 +51,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F18 | Local terminal tabs | In review | Claude | `local-serial` | Windows ConPTY untested here (no Windows box) |
 | F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
 | F20 | Session tags | In progress | Claude | `session-tags` | Tags beside folders, searchable with #tag; awaiting review |
-| F21 | Auto-update | Planned | Claude (beta queue) | — | Tauri updater against GitHub releases; needs a signing key |
+| F21 | Auto-update | In review | Claude | `auto-update` | In-place install waits for Justin's signing key and secrets (README) |
 | F22 | Serial and Telnet connections | In review | Claude | `local-serial` | Tested with a PTY standing in for a device; needs a real USB console cable |
 
 ## Feature definitions and acceptance criteria
@@ -538,3 +538,19 @@ Copy this block into a dated entry below when starting or stopping work:
     open empty (a port opens once). Profiles carry both. Live tests
     `local_terminal_runs_a_shell_and_ends_with_it`, `serial_terminal_talks_to_a_device` and
     `telnet_terminal_negotiates_and_relays`.
+  - F21 on `auto-update` (stacked on `local-serial`): `src-tauri/src/update.rs` lists releases
+    from the GitHub API (not `releases/latest`, which skips pre-releases, and every GhostKey
+    release so far is one) and picks the newest semver above the running version, skipping
+    drafts, links outside `Anon0ne/GhostKey`, and pre-releases when the setting says so.
+    `check_update` says whether the result can be installed in place: the release must carry
+    `latest.json`, the build must have `plugins.updater.pubkey` set, and the app must be the
+    Windows installer or an AppImage (`$APPIMAGE`); otherwise it gives the reason and the UI
+    offers the release page. `install_update` only accepts a `latest.json` under this
+    repository's release downloads and hands it to `tauri-plugin-updater`, which checks the
+    minisign signature before installing, then restarts. Startup check after 4 s (Settings →
+    Updates, on by default, pre-releases included by default), a badge at the top right,
+    Help → Check for updates…, and Skip this version. The release workflow signs and adds
+    `--config src-tauri/tauri.updater.conf.json` (`createUpdaterArtifacts`) only when the
+    `TAURI_SIGNING_PRIVATE_KEY` secret exists, so releases build without it. To finish: Justin
+    generates the key pair (README, "Signed updates"), commits the public key and adds the
+    two secrets. Ignored live test `github_lists_this_repositorys_releases`.

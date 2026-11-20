@@ -1847,9 +1847,9 @@ mod live {
         let dir = tempfile::tempdir().unwrap();
         let ssh = Arc::new(Ssh::new(dir.path().join("kh"), dir.path().join("logs")));
         let (id, mut rx) = start_plain(&ssh, |r| r.shell = Some("/bin/sh".into()));
-        ssh.input(id, b"echo GK_$((40+2)) $TERM; stty size\n".to_vec());
-        expect_output(&mut rx, "GK_42 xterm-256color").await;
-        expect_output(&mut rx, "24 80").await;
+        // One line, so the check can't miss text that arrived with an earlier chunk.
+        ssh.input(id, b"echo GK_$((40+2)) $TERM $(stty size)\n".to_vec());
+        expect_output(&mut rx, "GK_42 xterm-256color 24 80").await;
         ssh.resize(id, 100, 30);
         ssh.input(id, b"stty size\n".to_vec());
         expect_output(&mut rx, "30 100").await;

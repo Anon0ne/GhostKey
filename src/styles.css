@@ -54,6 +54,36 @@ body {
 
 /* ------------------------------------------------------------ menu bar */
 
+.update-badge {
+  position: fixed;
+  top: 3px;
+  right: 10px;
+  z-index: 5;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  padding: 1px 10px;
+  cursor: pointer;
+}
+
+.update-badge[hidden] {
+  display: none;
+}
+
+.update-notes {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.2));
+  padding: 8px;
+  border-radius: 4px;
+  margin: 6px 0;
+}
+
 #menubar {
   display: flex;
   align-items: stretch;
