@@ -3,6 +3,7 @@
 
 import type { BannerLink, ConnEvent, ConnectRequest, Prompt } from "./api";
 import type { TunnelStatus } from "./tunnels";
+import { Trace } from "./diagnostics";
 
 export type ConnState = "idle" | "busy" | "online" | "error";
 export type BaseRequest = Omit<ConnectRequest, "cols" | "rows">;
@@ -32,6 +33,8 @@ export interface ConnHooks {
   changed(): void;
   /** Whether to reconnect on its own after the connection drops. Off when not given. */
   autoReconnect?(): boolean;
+  /** The time in ms, for diagnostics timings. Defaults to Date.now. */
+  now?(): number;
   /** Runs `fn` after `ms` and returns a function that cancels it. Defaults to setTimeout. */
   schedule?(fn: () => void, ms: number): () => void;
 }
@@ -60,6 +63,8 @@ export class Connection {
   logPath: string | null = null;
   /** This connection's tunnels, as the backend last reported them. */
   tunnels: TunnelStatus[] = [];
+  /** The latest connection attempt's stages, for diagnostics. */
+  trace = new Trace();
   private gen = 0;
   /** While reconnecting on its own: the attempt being waited for or made (1-based), else 0. */
   private attempt = 0;
@@ -97,6 +102,10 @@ export class Connection {
     return this.connected && !this.closed && this.id !== null;
   }
 
+  private now() {
+    return this.hooks.now?.() ?? Date.now();
+  }
+
   private set(state: ConnState, status: string) {
     this.state = state;
     this.status = status;
@@ -121,6 +130,7 @@ export class Connection {
     this.closed = false;
     this.logPath = null;
     this.tunnels = [];
+    this.trace.start({ host: req.host, port: req.port, username: req.username, jump: req.jump?.host ?? null }, this.now());
     if (resume) this.hooks.writeln(ansi.dim(`Reconnecting (try ${this.attempt} of ${RECONNECT_DELAYS.length})…`));
     else this.hooks.reset();
     this.hooks.hideBanner();
@@ -149,6 +159,7 @@ export class Connection {
       this.hooks.closePrompts();
       this.hooks.hideBanner();
       this.hooks.writeln(ansi.err(`Couldn't start the connection: ${e}`));
+      this.trace.closed(String(e), false, this.now());
       this.closed = true;
       if (this.attempt > 0) this.retryLater();
       else this.set("error", "Failed");
@@ -244,7 +255,11 @@ export class Connection {
       case "prompt":
         this.hooks.prompt(e.id, e.prompt);
         break;
+      case "step":
+        this.trace.step(e, this.now());
+        break;
       case "connected":
+        this.trace.connected(this.now());
         this.connected = true;
         this.hooks.hideBanner();
         if (this.attempt > 0) this.hooks.writeln(ansi.ok("Reconnected. This is a new shell; programs from the old one are gone."));
@@ -264,6 +279,7 @@ export class Connection {
         this.hooks.changed();
         break;
       case "closed":
+        this.trace.closed(e.error, !!e.lost, this.now());
         this.closed = true;
         this.logPath = null;
         this.tunnels = [];
@@ -283,7 +299,9 @@ export class Connection {
           }
         } else if (e.error) {
           this.hooks.writeln(`\r\n${ansi.err(e.error)}`);
-          this.set("error", e.lost ? "Connection lost" : "Connection closed with an error");
+          const advice = this.trace.advice();
+          if (advice) this.hooks.writeln(ansi.warn(advice));
+          this.set("error", e.lost ? "Connection lost" : (this.trace.summary ?? "Connection closed with an error"));
         } else {
           this.hooks.writeln(`\r\n${ansi.dim("Connection closed.")}`);
           this.set("idle", "Disconnected");

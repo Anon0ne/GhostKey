@@ -3,6 +3,7 @@ import type { Scan } from "./importPlan";
 import type { Snippet } from "./snippets";
 import type { Listing, TransferEvent } from "./files";
 import type { Forward, TunnelStatus } from "./tunnels";
+import type { Stage } from "./diagnostics";
 
 export type AuthMethod = "password" | "key";
 
@@ -73,6 +74,7 @@ export type ConnEvent =
   | { type: "banner"; text: string; links: BannerLink[]; autoOpened: string | null }
   | { type: "prompt"; id: number; prompt: Prompt }
   | { type: "connected" }
+  | { type: "step"; stage: Stage; done: boolean; hop: string | null; detail: string | null }
   | { type: "logging"; path: string | null; error: string | null }
   | { type: "tunnels"; tunnels: TunnelStatus[] }
   | { type: "closed"; error: string | null; lost?: boolean; retryable?: boolean };

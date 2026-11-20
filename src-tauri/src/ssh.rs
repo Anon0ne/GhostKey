@@ -93,6 +93,15 @@ pub enum ConnEvent {
     Tunnels {
         tunnels: Vec<TunnelStatus>,
     },
+    /// A connection stage started (`done` false) or finished (`done` true). A
+    /// stage that started and never finished is where a failed connection stopped.
+    Step {
+        stage: Stage,
+        done: bool,
+        /// Set for a stage on the jump host rather than the server.
+        hop: Option<String>,
+        detail: Option<String>,
+    },
     Closed {
         error: Option<String>,
         /// The connection was up and dropped without the shell exiting or the
@@ -101,6 +110,20 @@ pub enum ConnEvent {
         /// A network failure that trying again may fix, unlike a refused login.
         retryable: bool,
     },
+}
+
+/// The stages of a connection, in order, for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Stage {
+    Dns,
+    Tcp,
+    Handshake,
+    HostKey,
+    Auth,
+    /// Reaching the server through the jump host.
+    Forward,
+    Shell,
 }
 
 /// Marks errors from reaching the server at all, which are worth retrying.
@@ -264,6 +287,7 @@ impl Ssh {
             },
             known_hosts: self.known_hosts.clone(),
             log_dir: self.log_dir.clone(),
+            hop: None,
         };
         let this = Arc::clone(self);
         // Hold the lock until the entry is in, so a fast failure can't try to
@@ -402,9 +426,15 @@ struct ConnCtx {
     prompts: Prompter,
     known_hosts: PathBuf,
     log_dir: Arc<Mutex<PathBuf>>,
+    /// Names the jump host when this context logs in there.
+    hop: Option<String>,
 }
 
 impl ConnCtx {
+    fn step(&self, stage: Stage, done: bool, detail: Option<String>) {
+        step(&self.sinks, &self.hop, stage, done, detail);
+    }
+
     fn status(&self, message: impl Into<String>) {
         self.sinks.event(ConnEvent::Status {
             message: message.into(),
@@ -449,6 +479,7 @@ impl ConnCtx {
             prompts: self.prompts.clone(),
             known_hosts: self.known_hosts.clone(),
             log_dir: self.log_dir.clone(),
+            hop: Some(jump.host.clone()),
         }
     }
 
@@ -487,6 +518,16 @@ struct Handler {
     remote: RemoteTargets,
     /// Banners and links already shown, so repeats don't reopen the browser.
     banners: links::BannerSeen,
+    hop: Option<String>,
+}
+
+fn step(sinks: &Sinks, hop: &Option<String>, stage: Stage, done: bool, detail: Option<String>) {
+    sinks.event(ConnEvent::Step {
+        stage,
+        done,
+        hop: hop.clone(),
+        detail,
+    });
 }
 
 impl client::Handler for Handler {
@@ -505,8 +546,21 @@ impl client::Handler for Handler {
             }
         };
         let fingerprint = hostkeys::fingerprint(key);
+        // Key exchange is done once the server's key is in hand.
+        step(&self.sinks, &self.hop, Stage::Handshake, true, None);
+        step(&self.sinks, &self.hop, Stage::HostKey, false, None);
+        let algorithm = hostkeys::algorithm(key);
         match hostkeys::check(&self.host, self.port, key, &self.known_hosts)? {
-            HostKeyStatus::Trusted => Ok(true),
+            HostKeyStatus::Trusted => {
+                step(
+                    &self.sinks,
+                    &self.hop,
+                    Stage::HostKey,
+                    true,
+                    Some(format!("{algorithm}, already trusted")),
+                );
+                Ok(true)
+            }
             HostKeyStatus::Changed { line } => {
                 *self.rejection.lock().unwrap() = Some(format!(
                     "WARNING: the host key for {} has CHANGED. This could mean someone is \
@@ -532,6 +586,13 @@ impl client::Handler for Handler {
                     .await;
                 if answer.accept {
                     hostkeys::learn(&self.host, self.port, key, &self.known_hosts)?;
+                    step(
+                        &self.sinks,
+                        &self.hop,
+                        Stage::HostKey,
+                        true,
+                        Some(format!("{algorithm}, trusted now")),
+                    );
                     Ok(true)
                 } else {
                     *self.rejection.lock().unwrap() = Some("Host key not trusted".into());
@@ -616,16 +677,41 @@ fn ssh_config() -> Arc<client::Config> {
     })
 }
 
-async fn tcp_connect(host: &str, port: u16) -> anyhow::Result<tokio::net::TcpStream> {
-    let stream = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        tokio::net::TcpStream::connect((host, port)),
-    )
-    .await
-    .map_err(|_| NetworkError(format!("Timed out connecting to {host}:{port}")))?
-    .map_err(|e| NetworkError(format!("Couldn't reach {host}:{port}: {e}")))?;
-    stream.set_nodelay(true).ok();
-    Ok(stream)
+/// Looks up `host` and connects to the first address that answers.
+async fn tcp_connect(
+    ctx: &ConnCtx,
+    host: &str,
+    port: u16,
+) -> anyhow::Result<tokio::net::TcpStream> {
+    ctx.step(Stage::Dns, false, None);
+    let addrs: Vec<std::net::SocketAddr> =
+        tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((host, port)))
+            .await
+            .map_err(|_| NetworkError(format!("Timed out looking up {host}")))?
+            .map_err(|e| NetworkError(format!("Couldn't find {host}: {e}")))?
+            .collect();
+    if addrs.is_empty() {
+        return Err(NetworkError(format!("Couldn't find {host}: no addresses")).into());
+    }
+    let found = match addrs.len() {
+        1 => addrs[0].ip().to_string(),
+        n => format!("{} and {} more", addrs[0].ip(), n - 1),
+    };
+    ctx.step(Stage::Dns, true, Some(found));
+    ctx.step(Stage::Tcp, false, None);
+    let mut last = None;
+    for addr in &addrs {
+        match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => {
+                stream.set_nodelay(true).ok();
+                ctx.step(Stage::Tcp, true, Some(addr.to_string()));
+                return Ok(stream);
+            }
+            Ok(Err(e)) => last = Some(format!("Couldn't reach {host}:{port}: {e}")),
+            Err(_) => last = Some(format!("Timed out connecting to {host}:{port}")),
+        }
+    }
+    Err(NetworkError(last.unwrap_or_default()).into())
 }
 
 /// Runs the SSH handshake over `stream`, checks the host key, and logs in.
@@ -649,7 +735,9 @@ where
         rejection: rejection.clone(),
         remote,
         banners: links::BannerSeen::default(),
+        hop: ctx.hop.clone(),
     };
+    ctx.step(Stage::Handshake, false, None);
     let mut handle = match client::connect_stream(ssh_config(), stream, handler).await {
         Ok(h) => h,
         Err(e) => {
@@ -659,9 +747,11 @@ where
             return Err(e);
         }
     };
+    ctx.step(Stage::Auth, false, None);
     if !authenticate(&mut handle, ctx).await? {
         anyhow::bail!("Login to {} failed: no more login methods to try", req.host);
     }
+    ctx.step(Stage::Auth, true, None);
     Ok(handle)
 }
 
@@ -678,7 +768,7 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
             "Connecting to jump host {}:{}…",
             jump.host, jump.port
         ));
-        let stream = tcp_connect(&jump.host, jump.port).await?;
+        let stream = tcp_connect(&hop, &jump.host, jump.port).await?;
         ctx.status(format!("Logging in to jump host {}…", jump.host));
         let jh = login(&hop, stream, Arc::default())
             .await
@@ -687,6 +777,7 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
             "Reaching {}:{} through {}…",
             req.host, req.port, jump.host
         ));
+        ctx.step(Stage::Forward, false, None);
         let channel = jh
             .channel_open_direct_tcpip(req.host.clone(), req.port.into(), "127.0.0.1", 0)
             .await
@@ -698,23 +789,26 @@ async fn run(ctx: ConnCtx, mut cmds: mpsc::UnboundedReceiver<ConnCmd>) -> anyhow
                     req.port
                 )
             })?;
+        ctx.step(Stage::Forward, true, None);
         jump_handle = Some(jh);
         ctx.status("Logging in…");
         login(&ctx, channel.into_stream(), remote.clone()).await?
     } else {
         ctx.status(format!("Connecting to {}:{}…", req.host, req.port));
-        let stream = tcp_connect(&req.host, req.port).await?;
+        let stream = tcp_connect(&ctx, &req.host, req.port).await?;
         ctx.status("Logging in…");
         login(&ctx, stream, remote.clone()).await?
     };
 
     let handle = Arc::new(handle);
+    ctx.step(Stage::Shell, false, None);
     let channel = handle.channel_open_session().await?;
     channel
         .request_pty(true, "xterm-256color", req.cols, req.rows, 0, 0, &[])
         .await?;
     channel.request_shell(true).await?;
     let (mut reader, writer) = channel.split();
+    ctx.step(Stage::Shell, true, None);
     ctx.sinks.event(ConnEvent::Connected);
     let mut log = LineLog::default();
     log.set_width(req.cols as usize);
@@ -1044,6 +1138,7 @@ mod live {
     use std::sync::Mutex as StdMutex;
     use tokio::sync::mpsc::UnboundedReceiver;
 
+    #[derive(Clone)]
     struct Env {
         host: String,
         port: u16,
@@ -1512,6 +1607,99 @@ mod live {
         })
         .await;
         assert!(failed.is_some());
+    }
+
+    /// Like `drive`, but returns the stages seen and the stage left unfinished.
+    async fn stages(
+        ssh: &Arc<Ssh>,
+        rx: &mut UnboundedReceiver<Seen>,
+        mut answer: impl FnMut(&Prompt) -> PromptAnswer,
+    ) -> (Vec<Stage>, Option<Stage>, bool) {
+        let mut done = Vec::new();
+        let mut open = None;
+        loop {
+            let seen = tokio::time::timeout(Duration::from_secs(20), rx.recv())
+                .await
+                .expect("timed out waiting for the connection")
+                .expect("connection dropped its sinks");
+            match seen {
+                Seen::Event(ConnEvent::Prompt { id, prompt }) => ssh.answer(id, answer(&prompt)),
+                Seen::Event(ConnEvent::Step {
+                    stage, done: false, ..
+                }) => open = Some(stage),
+                Seen::Event(ConnEvent::Step {
+                    stage, done: true, ..
+                }) => {
+                    assert_eq!(open, Some(stage), "{stage:?} finished without starting");
+                    open = None;
+                    done.push(stage);
+                }
+                Seen::Event(ConnEvent::Connected) => return (done, open, true),
+                Seen::Event(ConnEvent::Closed { .. }) => return (done, open, false),
+                _ => {}
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stages_show_where_a_connection_stopped() {
+        let Some(env) = env() else {
+            eprintln!("GHOSTKEY_TEST_HOST not set; skipping live diagnostics tests");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = Arc::new(Ssh::new(
+            dir.path().join("known_hosts"),
+            dir.path().join("logs"),
+        ));
+        let pw = env.password.clone();
+        let refuse = PromptAnswer {
+            accept: false,
+            values: Vec::new(),
+            save: false,
+        };
+
+        // Every stage, in order, when it works.
+        let (_, mut rx) = start(&ssh, &env, AuthMethod::Password, Arc::default());
+        let (done, open, up) = stages(&ssh, &mut rx, |p| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            _ => yes(&[&pw]),
+        })
+        .await;
+        assert!(up);
+        assert_eq!(open, None);
+        use Stage::*;
+        assert_eq!(done, vec![Dns, Tcp, Handshake, HostKey, Auth, Shell]);
+
+        // A name that doesn't resolve stops at DNS.
+        let nowhere = Env {
+            host: "ghostkey-test.invalid".into(),
+            ..env.clone()
+        };
+        let (_, mut rx) = start(&ssh, &nowhere, AuthMethod::Password, Arc::default());
+        assert_eq!(
+            stages(&ssh, &mut rx, |_| refuse.clone()).await,
+            (vec![], Some(Dns), false)
+        );
+
+        // Nothing listening stops at TCP.
+        let closed_port = Env {
+            port: free_port(),
+            ..env.clone()
+        };
+        let (_, mut rx) = start(&ssh, &closed_port, AuthMethod::Password, Arc::default());
+        assert_eq!(
+            stages(&ssh, &mut rx, |_| refuse.clone()).await,
+            (vec![Dns], Some(Tcp), false)
+        );
+
+        // A cancelled login stops at authentication.
+        let (_, mut rx) = start(&ssh, &env, AuthMethod::Password, Arc::default());
+        let (done, open, up) = stages(&ssh, &mut rx, |_| refuse.clone()).await;
+        assert_eq!(
+            (done, open, up),
+            (vec![Dns, Tcp, Handshake, HostKey], Some(Auth), false)
+        );
     }
 
     fn free_port() -> u16 {

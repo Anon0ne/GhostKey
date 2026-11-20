@@ -39,7 +39,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F06 | Broadcast input | In progress | Claude | `broadcast` | Chosen panes across tabs, bar and outlines, multi-destination paste/snippet review; awaiting review |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
-| F09 | Connection diagnostics | Planned | Claude (beta queue) | — | Define connection stages and redacted diagnostics |
+| F09 | Connection diagnostics | In progress | Claude | `diagnostics` | Stage events, failure advice, redacted copyable report; awaiting review |
 | F10 | Network recovery | In progress | Claude | `network-recovery` | Auto-reconnect with backoff, wake and network-change probes; awaiting review |
 | F11 | tmux integration | Planned | Claude (beta queue) | — | Define explicit attach/create flow |
 | F12 | Workspace layouts | Planned | Claude (beta queue) | — | Coordinate with F01's pane/session model |
@@ -451,3 +451,12 @@ Copy this block into a dated entry below when starting or stopping work:
     ("Tab 1, pane 2: …") and cancel if the group changed while open. Ctrl+Shift+I and
     Session → Broadcast input… choose panes; the yellow bar has Change… and Stop. F13 should
     add its production warning to the same destination list.
+  - F09 on `diagnostics` (stacked on `broadcast`): `ConnEvent::Step {stage, done, hop,
+    detail}` marks each stage's start and finish (dns, tcp, handshake, hostKey, auth, forward
+    through a jump host, shell); a stage that started and never finished is where a failed
+    connection stopped. `tcp_connect` now resolves first and tries each address. Frontend
+    `src/diagnostics.ts` keeps a `Trace` per attempt (reset on every retry, so old errors
+    don't linger), gives advice per stage and error, and builds a report that leaves out
+    host, user and addresses unless asked, and always removes sign-in tokens and home folder
+    names. Toolbar status reads "Failed: log in" etc.; Diagnostics button and Session menu
+    item open the dialog. Live test `stages_show_where_a_connection_stopped`.
