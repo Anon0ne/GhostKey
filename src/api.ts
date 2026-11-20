@@ -4,6 +4,7 @@ import type { Snippet } from "./snippets";
 import type { Listing, TransferEvent } from "./files";
 import type { Forward, TunnelStatus } from "./tunnels";
 import type { Stage } from "./diagnostics";
+import type { Environment } from "./hostLabels";
 
 export type AuthMethod = "password" | "key" | "agent";
 
@@ -22,6 +23,9 @@ export interface SavedSession {
   forwards: Forward[];
   /** Another saved session to connect through first. */
   jumpSession: string | null;
+  /** Labels for finding sessions. */
+  tags: string[];
+  environment: Environment;
 }
 
 export interface JumpRequest {

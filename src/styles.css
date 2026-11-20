@@ -1480,3 +1480,32 @@ textarea.snippet-input:focus {
 .key-details p { margin: 0; }
 .key-details .btn { justify-self: start; }
 .agent-keys { margin: 4px 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+
+/* Environment badges and tags. Text and icon carry the meaning; color only adds to it. */
+.env-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 16px;
+  white-space: nowrap;
+  flex: none;
+}
+.env-badge[hidden] { display: none; }
+.env-production { color: #fff; background: var(--red); border-color: var(--red); }
+.env-staging { color: var(--yellow); }
+.env-development { color: var(--green); }
+.env-lab { color: var(--accent); }
+.session-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-name > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.session-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.tag { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 0 6px; }
+.tab .env-badge { font-size: 9px; line-height: 14px; padding: 0 4px; }
+#conn-env { margin-right: 6px; }
+.prod-warning { color: var(--error); font-weight: 600; }
+label.prod-warning[hidden] { display: none; }

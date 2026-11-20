@@ -43,14 +43,14 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F10 | Network recovery | In progress | Claude | `network-recovery` | Auto-reconnect with backoff, wake and network-change probes; awaiting review |
 | F11 | tmux integration | Planned | Claude (beta queue) | — | Define explicit attach/create flow |
 | F12 | Workspace layouts | Planned | Claude (beta queue) | — | Coordinate with F01's pane/session model |
-| F13 | Host identity guardrails | Planned | Claude (beta queue) | — | Define host labels and production designation |
+| F13 | Host identity guardrails | In progress | Claude | `session-tags` | Environment badges in list/tab/toolbar, production warnings in snippets, paste and broadcast; awaiting review |
 | F14 | Searchable terminal history | In progress | Codex | `feature/paste-and-history` | Per-pane in-memory search implemented; review pending; persistent/all-pane history deferred |
 | F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
 | F16 | Evidence bookmarks | Planned | Claude (beta queue) | — | Define selection metadata and export format |
 | F17 | Portable session profiles | Planned | Claude (beta queue) | — | Define versioned export/import format |
 | F18 | Local terminal tabs | Planned | Claude (beta queue) | — | Define local PTY lifecycle on both platforms |
 | F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
-| F20 | Session tags | Planned | Claude (beta queue) | — | Tags beside the existing folders, searchable |
+| F20 | Session tags | In progress | Claude | `session-tags` | Tags beside folders, searchable with #tag; awaiting review |
 | F21 | Auto-update | Planned | Claude (beta queue) | — | Tauri updater against GitHub releases; needs a signing key |
 | F22 | Serial and Telnet connections | Planned | Claude (beta queue) | — | Serial ports and Telnet as session types |
 
@@ -471,3 +471,11 @@ Copy this block into a dated entry below when starting or stopping work:
     `keys::tests` (needs `ssh-keygen` for the PEM case) and live
     `agent_login_uses_keys_from_the_agent` (needs `ssh-agent`). Not done: Pageant and the
     Windows agent are untested here (no Windows box); PPK export isn't offered.
+  - F20 + F13 on `session-tags` (stacked on `ssh-keys`): `SavedSession` gains `tags`
+    (cleaned on save: trimmed, no `#`, no spaces, no repeats ignoring case, at most 12 of 32
+    chars) and `environment` ("" | production | staging | development | lab; older files load
+    as ""). `src/hostLabels.ts` parses tags, builds badges (icon + text, never color alone)
+    and matches search (every word must match; `#x` matches only tags). Panes look their
+    session up live by `sessionId`, so edits relabel open tabs at once. Production: tab shows
+    PROD if any pane in it is production; snippets to production always preview with Cancel as
+    default; paste review and broadcast bar say so; broadcast choice needs an extra checkbox.
