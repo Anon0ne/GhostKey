@@ -1730,6 +1730,8 @@ mod live {
         let (id, mut rx) = connect(&name);
         let (_, _, closed) = drive(&ssh, &mut rx, answer).await;
         assert_eq!(closed, None, "login failed");
+        // Input sent before tmux takes over the terminal can be dropped, so wait for its status line.
+        expect_output(&mut rx, "[gk-test").await;
         ssh.input(id, b"GKMARK=kept-$((20+22))\n".to_vec());
         ssh.input(id, b"echo set-$GKMARK\n".to_vec());
         expect_output(&mut rx, "set-kept-42").await;
@@ -1747,6 +1749,7 @@ mod live {
         let (id, mut rx) = connect(&name);
         let (_, _, closed) = drive(&ssh, &mut rx, answer).await;
         assert_eq!(closed, None, "second login failed");
+        expect_output(&mut rx, "[gk-test").await;
         ssh.input(id, b"echo again-$GKMARK\n".to_vec());
         expect_output(&mut rx, "again-kept-42").await;
         // The test cleans up after itself; GhostKey never does this on its own.
