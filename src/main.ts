@@ -18,6 +18,7 @@ import { Pane, type PaneHost } from "./pane";
 import { openTunnels, savedTunnelsEditor, tunnelsChanged } from "./tunnelUi";
 import { Broadcast } from "./broadcast";
 import { openKeyManager } from "./keyManager";
+import { ENVIRONMENTS, envBadge, envInfo, isProduction, matchesSearch, parseTags, type Environment } from "./hostLabels";
 import { report, stageLabel, type Step } from "./diagnostics";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
@@ -85,6 +86,7 @@ const host: PaneHost = {
   },
   destinations: (pane) => broadcast.targets(pane),
   label: (pane) => paneLabel(pane),
+  production: (pane) => isProduction(paneEnv(pane)),
   activate: (pane) => focusPane(pane, false),
   changed: (pane) => {
     renderTabs();
@@ -275,6 +277,8 @@ function renderTabs() {
       "div",
       { class: `tab${tab === current ? " current" : ""}`, role: "tab", "aria-selected": String(tab === current), title: p.title },
       el("span", { class: `dot ${p.conn.state}` }),
+      // The worst environment in the tab, so production is never hidden behind a split.
+      badgeEl(all.some((x) => isProduction(paneEnv(x))) ? "production" : paneEnv(p)),
       el("span", { class: "tab-title", text: p.title }),
       all.length > 1 ? el("span", { class: "tab-count", text: String(all.length) }) : null,
       recording ? el("span", { class: "tab-rec", title: "Logging", text: "●" }) : null,
@@ -292,6 +296,12 @@ function renderToolbar() {
   const conn = activePane().conn;
   $("status-dot").className = `dot ${conn.state}`;
   $("conn-title").textContent = conn.request ? conn.title : "Not connected";
+  const envNode = $("conn-env");
+  const env = paneEnv(activePane());
+  envNode.hidden = !env;
+  envNode.className = `env-badge env-${env}`;
+  envNode.textContent = envBadge(env);
+  envNode.title = env ? `${envInfo(env)?.label} system` : "";
   $("conn-status").textContent = conn.status;
   const stop = $<HTMLButtonElement>("disconnect");
   stop.hidden = !conn.active;
@@ -545,6 +555,21 @@ function snippetTitle(s: Snippet): string {
   return `${how}: ${pastePreview(payload(s).text)}`;
 }
 
+/** The saved session a pane connected from, looked up live so edits show at once. */
+function savedFor(pane: Pane): SavedSession | undefined {
+  const id = pane.conn.request?.sessionId;
+  return id ? sessions.find((s) => s.id === id) : undefined;
+}
+
+function paneEnv(pane: Pane): Environment {
+  return pane.conn.request ? (savedFor(pane)?.environment ?? "") : "";
+}
+
+function badgeEl(env: Environment): HTMLElement | null {
+  const e = envInfo(env);
+  return e ? el("span", { class: `env-badge env-${e.value}`, title: `${e.label} system`, text: envBadge(env) }) : null;
+}
+
 function destination(pane: Pane): string {
   const r = pane.conn.request;
   if (!r) return pane.title;
@@ -557,7 +582,8 @@ function paneLabel(pane: Pane): string {
   if (ti < 0) return destination(pane);
   const list = panes(tabs[ti].root);
   const where = list.length > 1 ? `Tab ${ti + 1}, pane ${list.indexOf(pane) + 1}` : `Tab ${ti + 1}`;
-  return `${where}: ${destination(pane)}`;
+  const badge = envBadge(paneEnv(pane));
+  return `${where}: ${badge ? `${badge} ` : ""}${destination(pane)}`;
 }
 
 /** Sends a snippet to the focused pane. Running it, or anything a paste would
@@ -574,8 +600,9 @@ async function sendSnippet(s: Snippet) {
   const bound = { id: pane.conn.id, request: pane.conn.request };
   const { text, enter } = payload(s);
   const targets = pane.destinations();
-  // Sending to several servers at once always gets a second look.
-  if (needsPreview(s) || targets.length > 1) {
+  // Sending to several servers, or to production, always gets a second look.
+  const prod = targets.filter((p) => isProduction(paneEnv(p)));
+  if (needsPreview(s) || targets.length > 1 || prod.length) {
     const lines = lineCount(s);
     const careful = risky(s);
     const ok = await showModal<boolean>({
@@ -583,7 +610,8 @@ async function sendSnippet(s: Snippet) {
       body: [
         targets.length > 1
           ? el("div", { class: "fingerprint" }, el("span", { text: `Broadcast to ${targets.length} terminals` }), ...targets.map((p) => el("code", { text: paneLabel(p) })))
-          : el("div", { class: "fingerprint" }, el("span", { text: "Destination" }), el("code", { text: destination(pane) })),
+          : el("div", { class: "fingerprint" }, el("span", { text: "Destination" }), el("code", { text: paneLabel(pane) })),
+        prod.length ? el("p", { class: "prod-warning", text: `⚠ This goes to ${prod.length === 1 ? "a production system" : `${prod.length} production systems`}.` }) : el("span"),
         el("pre", { class: "snippet-preview", text: pastePreview(text) }),
         el("p", {
           class: "hint",
@@ -599,8 +627,8 @@ async function sendSnippet(s: Snippet) {
       ],
       // Like the paste review, Enter cancels when the text could run more than one command.
       buttons: [
-        { label: "Cancel", value: () => false, primary: careful },
-        { label: enter ? "Run" : "Type in", value: () => true, primary: !careful },
+        { label: "Cancel", value: () => false, primary: careful || prod.length > 0 },
+        { label: enter ? "Run" : "Type in", value: () => true, primary: !careful && !prod.length, danger: prod.length > 0 },
       ],
       onDismiss: () => false,
     }).result;
@@ -864,9 +892,7 @@ function renderSessions() {
   const list = $("session-list");
   const query = $<HTMLInputElement>("search").value.trim().toLowerCase();
   const collapsed = collapsedFolders();
-  const shown = sessions.filter((s) =>
-    !query || [s.name, s.folder, s.host, s.username].some((v) => v.toLowerCase().includes(query)),
-  );
+  const shown = sessions.filter((s) => !query || matchesSearch(s, query));
 
   const groups = new Map<string, SavedSession[]>();
   for (const s of shown) {
@@ -919,7 +945,13 @@ function sessionRow(s: SavedSession): HTMLElement {
   const row = el(
     "div",
     { class: "session", tabindex: "0" },
-    el("div", { class: "session-text" }, el("span", { class: "session-name", text: s.name }), el("span", { class: "session-host", text: `${s.username}@${s.host}${s.port === 22 ? "" : `:${s.port}`}` })),
+    el(
+      "div",
+      { class: "session-text" },
+      el("span", { class: "session-name" }, badgeEl(s.environment), el("span", { text: s.name })),
+      el("span", { class: "session-host", text: `${s.username}@${s.host}${s.port === 22 ? "" : `:${s.port}`}` }),
+      s.tags.length ? el("span", { class: "session-tags" }, ...s.tags.map((t) => el("span", { class: "tag", text: `#${t}` }))) : null,
+    ),
     el("div", { class: "row-actions" }, connectBtn, editBtn, delBtn),
   );
   const go = () => connectSaved(s);
@@ -988,6 +1020,8 @@ async function editSession(existing?: Partial<SavedSession>) {
     autoLog: existing?.autoLog ?? false,
     forwards: existing?.forwards ?? [],
     jumpSession: existing?.jumpSession ?? null,
+    tags: existing?.tags ?? [],
+    environment: existing?.environment ?? "",
   };
 
   const name = el("input", { value: s.name, placeholder: "Kali lab", spellcheck: "false" });
@@ -1035,8 +1069,14 @@ async function editSession(existing?: Partial<SavedSession>) {
     forget = b;
   }
 
+  const env = el("select", {}, ...ENVIRONMENTS.map((e) => el("option", { value: e.value, text: e.label })));
+  env.value = s.environment ?? "";
+  const tags = el("input", { value: s.tags.map((t) => `#${t}`).join(" "), placeholder: "#web #client-a", spellcheck: "false" });
+
   const read = (): SavedSession => ({
     ...s,
+    environment: env.value as Environment,
+    tags: parseTags(tags.value),
     name: name.value.trim(),
     folder: folder.value.trim().replace(/^\/+|\/+$/g, ""),
     host: host.value.trim(),
@@ -1057,6 +1097,12 @@ async function editSession(existing?: Partial<SavedSession>) {
       el("div", { class: "grid" }, field("Name", name), field("Folder", folder)),
       el("div", { class: "grid host-row" }, field("Host", host), field("Port", port)),
       el("div", { class: "grid" }, field("Username", user), field("Login with", auth)),
+      el(
+        "div",
+        { class: "grid" },
+        field("Environment", env, "Production gets a badge everywhere and a warning before snippets, pastes and broadcast."),
+        field("Tags", tags, "Separate with spaces or commas. Search with #tag."),
+      ),
       keyField,
       jumpField,
       autoRow,
@@ -1274,6 +1320,7 @@ function renderBroadcast() {
   stop.addEventListener("click", stopBroadcast);
   bar.replaceChildren(
     el("strong", { text: `Broadcasting to ${members.length} terminals:` }),
+    members.some((p) => isProduction(paneEnv(p))) ? el("span", { class: "env-badge env-production", text: "⚠ Includes production" }) : "",
     el("span", { class: "broadcast-list", text: members.map((p) => paneLabel(p)).join(" · "), title: members.map((p) => paneLabel(p)).join("\n") }),
     el("span", { class: "spacer" }),
     change,
@@ -1300,18 +1347,29 @@ async function chooseBroadcast() {
     const [row, box] = checkbox(paneLabel(p), already.length ? already.includes(p) : inTab.includes(p));
     return { p, box, row };
   });
+  const [prodRow, prodOk] = checkbox("I mean to type into production systems");
+  prodRow.classList.add("prod-warning");
+  const syncProd = () => (prodRow.hidden = !rows.some((r) => r.box.checked && isProduction(paneEnv(r.p))));
+  for (const r of rows) r.box.addEventListener("change", syncProd);
+  syncProd();
   const ok = await showModal<boolean>({
     title: "Broadcast input",
     body: [
       el("p", { text: "What you type in any chosen terminal goes to all of them. Pastes and snippets show every destination first." }),
       el("div", { class: "broadcast-choices" }, ...rows.map((r) => r.row)),
+      prodRow,
       el("p", { class: "hint", text: "A terminal that disconnects or reconnects leaves the group and has to be chosen again. Login prompts are never broadcast." }),
     ],
     buttons: [
       { label: "Cancel", value: () => false },
       { label: "Broadcast", value: () => true, primary: true },
     ],
-    validate: () => (rows.filter((r) => r.box.checked).length < 2 ? "Choose at least two terminals." : null),
+    validate: () => {
+      const chosen = rows.filter((r) => r.box.checked);
+      if (chosen.length < 2) return "Choose at least two terminals.";
+      if (chosen.some((r) => isProduction(paneEnv(r.p))) && !prodOk.checked) return "Confirm that you mean to type into production.";
+      return null;
+    },
     onDismiss: () => false,
   }).result;
   if (!ok) return;

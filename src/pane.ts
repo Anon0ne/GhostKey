@@ -27,6 +27,8 @@ export interface PaneHost {
   destinations?(pane: Pane): Pane[];
   /** A name for `pane` that tells it apart from others on the same host. */
   label?(pane: Pane): string;
+  /** Whether `pane` is connected to a session marked as production. */
+  production?(pane: Pane): boolean;
   /** The pane wants focus, e.g. to show a login prompt. */
   activate(pane: Pane): void;
   changed(pane: Pane): void;
@@ -264,6 +266,7 @@ export class Pane {
     const id = this.conn.id;
     const targets = this.destinations();
     const where = (p: Pane) => this.host.label?.(p) ?? `${p.conn.request?.username}@${p.conn.request?.host}:${p.conn.request?.port} (${p.title})`;
+    const prod = targets.filter((p) => this.host.production?.(p));
     this.pastePending = true;
     try {
       // Pasting into several servers at once always gets a second look.
@@ -274,7 +277,10 @@ export class Pane {
           body: [
             targets.length > 1
               ? el("div", { class: "paste-targets" }, el("p", { text: "Broadcast is on. This goes to every one of:" }), el("ul", {}, ...targets.map((p) => el("li", { text: where(p) }))))
-              : el("p", { text: `Destination: ${request.username}@${request.host}:${request.port} (${this.title})` }),
+              : el("p", { text: `Destination: ${where(this)}` }),
+            prod.length
+              ? el("p", { class: "prod-warning", text: `⚠ This goes to ${prod.length === 1 ? "a production system" : `${prod.length} production systems`}.` })
+              : el("span"),
             el("p", { text: `${pasteLineCount(text)} lines. Newlines or control characters may execute commands immediately. Control characters other than line feed are shown as Unicode escapes.` }),
             el("pre", { class: "paste-preview", text: pastePreview(text) }),
           ],

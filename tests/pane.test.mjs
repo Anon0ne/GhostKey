@@ -244,3 +244,15 @@ test('broadcast pastes name every destination and stop if the group changes', as
   h.terminals[0].data('x');
   assert.deepEqual(sent.map(([t, d]) => [t === h.pane ? 'a' : 'b', d]), [['a', 'x'], ['b', 'x']]);
 });
+
+test('a paste review to production says so and defaults to Cancel', async () => {
+  const h = harness({ production: () => true, label: () => 'Tab 1: ⚠ PROD alice@example:22' });
+  const p = h.pane.pasteText('one\ntwo');
+  assert.equal(h.modals.length, 1);
+  const text = JSON.stringify(h.modals[0].opts.body);
+  assert.match(text, /production system/);
+  assert.match(text, /⚠ PROD alice@example/);
+  assert.equal(h.modals[0].opts.buttons[0].primary, true);
+  h.modals[0].close();
+  await p;
+});

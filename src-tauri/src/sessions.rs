@@ -48,6 +48,51 @@ pub struct SavedSession {
     /// Another saved session to connect through first, like ProxyJump.
     #[serde(default)]
     pub jump_session: Option<Uuid>,
+    /// Free-form labels for finding sessions, e.g. "web" or "client-a".
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// What kind of system this is. Production gets extra warnings.
+    #[serde(default)]
+    pub environment: Environment,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Environment {
+    #[default]
+    #[serde(rename = "")]
+    None,
+    Production,
+    Staging,
+    Development,
+    Lab,
+}
+
+const MAX_TAGS: usize = 12;
+const MAX_TAG_CHARS: usize = 32;
+
+/// Trims tags, drops empty ones and repeats (ignoring case), and limits their number and length.
+fn clean_tags(tags: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in tags {
+        let t: String = t
+            .trim()
+            .trim_start_matches('#')
+            .trim()
+            .chars()
+            .take(MAX_TAG_CHARS)
+            .collect();
+        if !t.is_empty()
+            && !t.chars().any(char::is_whitespace)
+            && !out.iter().any(|o| o.eq_ignore_ascii_case(&t))
+        {
+            out.push(t);
+        }
+        if out.len() == MAX_TAGS {
+            break;
+        }
+    }
+    out
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,8 +137,9 @@ impl SessionStore {
     }
 
     /// Inserts or replaces the session with the same id.
-    pub fn save(&self, session: SavedSession) -> anyhow::Result<()> {
+    pub fn save(&self, mut session: SavedSession) -> anyhow::Result<()> {
         validate(&session)?;
+        session.tags = clean_tags(&session.tags);
         let mut sessions = self.list()?;
         match sessions.iter_mut().find(|s| s.id == session.id) {
             Some(existing) => *existing = session,
@@ -166,7 +212,45 @@ mod tests {
             auto_log: false,
             forwards: Vec::new(),
             jump_session: None,
+            tags: Vec::new(),
+            environment: Environment::None,
         }
+    }
+
+    #[test]
+    fn tags_and_environment_are_saved_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions.json"));
+        let mut s = sample("x", "");
+        s.tags = vec![
+            " web ".into(),
+            "#db".into(),
+            "WEB".into(),
+            "".into(),
+            "two words".into(),
+            "x".repeat(40),
+        ];
+        s.environment = Environment::Production;
+        store.save(s.clone()).unwrap();
+        let got = store.get(s.id).unwrap().unwrap();
+        assert_eq!(
+            got.tags,
+            vec!["web".to_string(), "db".into(), "x".repeat(32)]
+        );
+        assert_eq!(got.environment, Environment::Production);
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains("\"environment\": \"production\""));
+    }
+
+    #[test]
+    fn sessions_saved_before_tags_still_load() {
+        let old = r#"{"id":"6f9619ff-8b86-d011-b42d-00cf4fc964ff","name":"a","host":"h","port":22,"username":"u","auth":"password"}"#;
+        let s: SavedSession = serde_json::from_str(old).unwrap();
+        assert!(s.tags.is_empty());
+        assert_eq!(s.environment, Environment::None);
+        let none: SavedSession =
+            serde_json::from_str(&old.replace("}", r#","environment":""}"#)).unwrap();
+        assert_eq!(none.environment, Environment::None);
     }
 
     #[test]
