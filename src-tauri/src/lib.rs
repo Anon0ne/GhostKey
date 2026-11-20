@@ -196,7 +196,8 @@ fn connect(
             if !links::is_safe_to_open(url) {
                 anyhow::bail!("Only https links can be opened");
             }
-            app.opener().open_url(url, None::<&str>)?;
+            app.state::<links::ApprovalBrowser>()
+                .open(url, true, || app.opener().open_url(url, None::<&str>))?;
             Ok(())
         }),
     };
@@ -230,7 +231,14 @@ fn open_link(app: AppHandle, url: String) -> CmdResult<()> {
     if !links::is_safe_to_open(&url) {
         return Err("Only https links can be opened".into());
     }
-    app.opener().open_url(url, None::<&str>).map_err(err)
+    let launch = || app.opener().open_url(url.as_str(), None::<&str>);
+    if links::is_tailscale_url(&url) {
+        app.state::<links::ApprovalBrowser>()
+            .open(&url, false, launch)
+            .map_err(err)
+    } else {
+        launch().map_err(err)
+    }
 }
 
 /// True when this build carries a public key for checking signed updates.
@@ -561,6 +569,7 @@ pub fn run() {
             app.manage(WorkspaceStore::new(dir.join("workspaces.json")));
             app.manage(BookmarkStore::new(dir.join("bookmarks.json")));
             app.manage(Arc::new(Transfers::default()));
+            app.manage(links::ApprovalBrowser::default());
             app.manage(Arc::new(Ssh::new(dir.join("known_hosts"), state.log_dir())));
             app.manage(state);
             Ok(())

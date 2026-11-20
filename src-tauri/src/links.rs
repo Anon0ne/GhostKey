@@ -1,8 +1,9 @@
 //! Finds sign-in links in server banners, such as the one Tailscale SSH sends
 //! in check mode.
 
-use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::Serialize;
@@ -44,6 +45,52 @@ pub fn find_links(text: &str) -> Vec<BannerLink> {
 pub struct BannerSeen {
     last: Option<String>,
     opened: HashSet<String>,
+}
+
+const APPROVAL_WINDOW: Duration = Duration::from_secs(300);
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_secs(2);
+
+/// Shared across panes, jump hosts and connection retries. A new approval URL
+/// can still open independently, and the user can reopen a page deliberately.
+#[derive(Default)]
+pub struct ApprovalBrowser {
+    opened: Mutex<HashMap<String, Instant>>,
+}
+
+impl ApprovalBrowser {
+    pub fn open<E>(
+        &self,
+        url: &str,
+        automatic: bool,
+        launch: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.open_at(url, automatic, Instant::now(), launch)
+    }
+
+    fn open_at<E>(
+        &self,
+        url: &str,
+        automatic: bool,
+        now: Instant,
+        launch: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut opened = self.opened.lock().unwrap();
+        opened.retain(|_, last| now.saturating_duration_since(*last) < APPROVAL_WINDOW);
+        let interval = if automatic {
+            APPROVAL_WINDOW
+        } else {
+            DOUBLE_CLICK_WINDOW
+        };
+        if opened
+            .get(url)
+            .is_some_and(|last| now.saturating_duration_since(*last) < interval)
+        {
+            return Ok(());
+        }
+        launch()?;
+        opened.insert(url.to_string(), now);
+        Ok(())
+    }
 }
 
 impl BannerSeen {
@@ -106,6 +153,30 @@ fn host_of(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_launch_is_shared_and_manual_retry_remains_available() {
+        let browser = ApprovalBrowser::default();
+        let now = Instant::now();
+        let url = "https://login.tailscale.com/a/abc";
+        let other = "https://login.tailscale.com/a/def";
+        let launch = || Ok::<(), ()>(());
+        let duplicate = || -> Result<(), ()> { panic!("duplicate browser launch") };
+
+        assert_eq!(browser.open_at(url, true, now, || Err(())), Err(()));
+        browser.open_at(url, true, now, launch).unwrap();
+        browser.open_at(url, true, now, duplicate).unwrap();
+        browser.open_at(url, false, now, duplicate).unwrap();
+        browser.open_at(other, true, now, launch).unwrap();
+
+        let retry = now + DOUBLE_CLICK_WINDOW;
+        browser.open_at(url, false, retry, launch).unwrap();
+        browser.open_at(url, false, retry, duplicate).unwrap();
+        browser.open_at(url, true, retry, duplicate).unwrap();
+        browser
+            .open_at(url, true, retry + APPROVAL_WINDOW, launch)
+            .unwrap();
+    }
 
     #[test]
     fn finds_tailscale_check_link() {
