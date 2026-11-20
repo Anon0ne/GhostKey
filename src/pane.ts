@@ -216,7 +216,7 @@ export class Pane {
 
   welcome() {
     this.term.reset();
-    this.term.writeln(ansi.info("  GhostKey") + ansi.dim("  alpha"));
+    this.term.writeln(ansi.info("  GhostKey") + ansi.dim("  beta"));
     this.term.writeln("");
     this.term.writeln("  Double-click a saved session, or type " + ansi.ok("user@host") + " in Quick connect.");
     this.term.writeln(ansi.dim("  Ctrl+Shift+T new tab, Ctrl+Shift+R split right, Ctrl+Shift+D split down."));
