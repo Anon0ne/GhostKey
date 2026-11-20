@@ -1541,3 +1541,27 @@ label.prod-warning[hidden] { display: none; }
   grid-template-columns: 110px 1fr;
   gap: 8px;
 }
+
+/* tmux sessions */
+.tmux-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 12px;
+  max-height: 40vh;
+  overflow: auto;
+}
+.tmux-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.tmux-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

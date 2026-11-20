@@ -24,6 +24,7 @@ import { report, stageLabel, type Step } from "./diagnostics";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
 import { jumpChain, jumpChoices, routeText } from "./jumps";
+import { describeTmux, tmuxNameProblem } from "./tmux";
 import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } from "./workspace";
 import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
@@ -197,7 +198,7 @@ function splitPane(dir: Dir) {
   if (from.conn.request) {
     const req = from.conn.request;
     // The new shell shares the server but not the tunnels, whose ports are taken.
-    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false, forwards: [] }, from.conn.title));
+    requestAnimationFrame(() => pane.conn.connect({ ...req, log: false, forwards: [], tmux: null }, from.conn.title));
   } else {
     pane.welcome();
   }
@@ -1063,6 +1064,7 @@ function requestFor(s: SavedSession): BaseRequest | null {
       label: s.name,
       forwards: s.forwards ?? [],
       jumps,
+      tmux: s.tmux || null,
     }
   );
 }
@@ -1084,6 +1086,7 @@ async function editSession(existing?: Partial<SavedSession>) {
     jumpSession: existing?.jumpSession ?? null,
     tags: existing?.tags ?? [],
     environment: existing?.environment ?? "",
+    tmux: existing?.tmux ?? "",
   };
 
   const name = el("input", { value: s.name, placeholder: "Kali lab", spellcheck: "false" });
@@ -1142,11 +1145,13 @@ async function editSession(existing?: Partial<SavedSession>) {
   const env = el("select", {}, ...ENVIRONMENTS.map((e) => el("option", { value: e.value, text: e.label })));
   env.value = s.environment ?? "";
   const tags = el("input", { value: s.tags.map((t) => `#${t}`).join(" "), placeholder: "#web #client-a", spellcheck: "false" });
+  const tmux = el("input", { value: s.tmux ?? "", placeholder: "e.g. work (empty for a plain shell)", spellcheck: "false" });
 
   const read = (): SavedSession => ({
     ...s,
     environment: env.value as Environment,
     tags: parseTags(tags.value),
+    tmux: tmux.value.trim(),
     name: name.value.trim(),
     folder: folder.value.trim().replace(/^\/+|\/+$/g, ""),
     host: host.value.trim(),
@@ -1175,6 +1180,7 @@ async function editSession(existing?: Partial<SavedSession>) {
       ),
       keyField,
       jumpField,
+      field("tmux session", tmux, "Attach to this tmux session on the server when connecting, creating it if needed, so programs keep running if the connection drops. Uses a plain shell if tmux isn't installed. GhostKey never closes tmux sessions."),
       autoRow,
       logRow,
       logHint,
@@ -1194,7 +1200,7 @@ async function editSession(existing?: Partial<SavedSession>) {
       if (!Number.isInteger(v.port) || v.port < 1 || v.port > 65535) return "Port must be between 1 and 65535.";
       if (!v.username) return "Enter a username.";
       if (v.auth === "key" && !v.keyPath) return "Choose a key file.";
-      return null;
+      return tmuxNameProblem(v.tmux);
     },
   }).result;
 
@@ -1235,7 +1241,7 @@ $("quick-connect").addEventListener("submit", (e) => {
   }
   const title = `${parsed.user}@${parsed.host}`;
   openSession(
-    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jumps: [] },
+    { sessionId: null, host: parsed.host, port: parsed.port, username: parsed.user, auth: "password", keyPath: null, autoOpenTailscale: false, log: false, label: title, forwards: [], jumps: [], tmux: null },
     title,
   );
 });
@@ -1482,6 +1488,57 @@ async function importProfile() {
   await confirm(failed.length ? "Profile partly imported" : "Profile imported", `${done} ${done === 1 ? "item" : "items"} added or updated.${failed.length ? `\n\nNot imported:\n${failed.join("\n")}` : ""}`, "OK");
 }
 
+// ---------------------------------------------------------------- tmux
+
+/** Lists the server's tmux sessions and opens the chosen one in a new tab. Never kills any. */
+async function openTmux() {
+  const pane = activePane();
+  const id = pane.conn.id;
+  const req = pane.conn.request;
+  if (id == null || !req) return;
+  let list;
+  try {
+    list = await api.listTmux(id);
+  } catch (e) {
+    await confirm("Couldn't list tmux sessions", String(e), "OK");
+    return;
+  }
+  if (!list.installed) {
+    await confirm("tmux sessions", `tmux isn't installed on ${pane.conn.title}, so there's nothing to attach to. Ordinary sessions still work.`, "OK");
+    return;
+  }
+  let picked: string | null = null;
+  const rows = list.sessions.map((s) => {
+    const open = el("button", { class: "btn", type: "button", text: "Open in new tab" });
+    open.addEventListener("click", () => {
+      picked = s.name;
+      close();
+    });
+    return el("div", { class: "tmux-row" }, el("div", {}, el("strong", { text: s.name }), el("small", { class: "hint", text: describeTmux(s) })), open);
+  });
+  const name = el("input", { placeholder: "new session name", spellcheck: "false", "aria-label": "New tmux session name" });
+  const { result, close } = showModal<"cancel" | "new">({
+    title: `tmux on ${pane.conn.title}`,
+    wide: true,
+    body: [
+      rows.length ? el("div", { class: "tmux-list" }, ...rows) : el("p", { class: "empty", text: "No tmux sessions are running." }),
+      field("Or start a new one", name, "Letters, digits, - and _. If it already exists, you attach to it."),
+      el("p", { class: "hint", text: "Attaching to a session someone else is using shares it: they see what you type, and you see their screen. Closing the tab detaches; the session keeps running until it's ended on the server." }),
+    ],
+    buttons: [
+      { label: "Close", value: () => "cancel" },
+      { label: "Start new session", value: () => "new", primary: true },
+    ],
+    validate: () => (name.value.trim() ? tmuxNameProblem(name.value.trim()) : "Enter a name, or open a session from the list."),
+    onDismiss: () => "cancel",
+  });
+  const choice = await result;
+  const target = picked ?? (choice === "new" ? name.value.trim() : null);
+  if (!target) return;
+  const tab = newTab();
+  tab.conn.connect({ ...req, log: false, forwards: [], tmux: target }, `${pane.conn.title} · tmux ${target}`);
+}
+
 // ---------------------------------------------------------------- menu bar
 
 const REPO_URL = "https://github.com/Anon0ne/GhostKey";
@@ -1606,6 +1663,7 @@ const menus: Menu[] = [
       { label: "Files", shortcut: "Ctrl+Shift+E", checked: () => activePane().filesOpen, run: () => activePane().toggleFiles() },
       { label: "Tunnels…", run: () => void openTunnels(conn()), enabled: () => conn().online },
       { label: "Connection diagnostics…", run: () => void showDiagnostics() },
+      { label: "tmux sessions…", run: () => void openTmux(), enabled: () => conn().online },
       "-",
       { label: "Broadcast input…", shortcut: "Ctrl+Shift+I", run: () => void chooseBroadcast() },
       { label: "Stop broadcasting", run: stopBroadcast, enabled: () => broadcast.on },

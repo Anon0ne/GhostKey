@@ -55,6 +55,7 @@ export function buildProfile(
       jumpSession: s.jumpSession,
       tags: s.tags ?? [],
       environment: s.environment ?? "",
+      tmux: s.tmux ?? "",
     })),
     snippets: data.snippets.map((s) => ({ id: s.id, name: s.name, group: s.group, command: s.command, run: s.run, favorite: s.favorite })),
     workspaces: data.workspaces,
@@ -98,6 +99,7 @@ function cleanSession(raw: unknown): SavedSession | string {
     jumpSession: typeof r.jumpSession === "string" && UUID.test(r.jumpSession) ? r.jumpSession : null,
     tags: Array.isArray(r.tags) ? parseTags(r.tags.filter((t) => typeof t === "string").join(" ")) : [],
     environment: env === "production" || env === "staging" || env === "development" || env === "lab" ? env : "",
+    tmux: typeof r.tmux === "string" && /^[A-Za-z0-9_@+=-]{1,64}$/.test(r.tmux) ? r.tmux : "",
   };
 }
 

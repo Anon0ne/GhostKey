@@ -10,6 +10,7 @@ mod settings;
 mod sftp;
 mod snippets;
 mod ssh;
+mod tmux;
 mod workspaces;
 
 use std::path::PathBuf;
@@ -355,6 +356,11 @@ fn stop_forward(ssh: State<'_, Arc<Ssh>>, id: u32, forward: Uuid) {
 }
 
 #[tauri::command]
+async fn list_tmux(ssh: State<'_, Arc<Ssh>>, id: u32) -> CmdResult<tmux::TmuxList> {
+    ssh.list_tmux(id).await.map_err(err)
+}
+
+#[tauri::command]
 fn sftp_cancel(transfers: State<'_, Arc<Transfers>>, transfer: u32) {
     transfers.cancel(transfer);
 }
@@ -458,6 +464,7 @@ pub fn run() {
             sftp_exists,
             sftp_transfer,
             sftp_cancel,
+            list_tmux,
             local_kind,
             default_download_dir,
             list_sessions,

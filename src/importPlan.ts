@@ -101,6 +101,7 @@ export function toSessions(rows: Row[], folder: string, newId: () => string, ses
         autoLog: false,
         forwards: [],
         jumpSession: null,
+        tmux: "",
         tags: [],
         environment: "",
       });
