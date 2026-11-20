@@ -1,6 +1,7 @@
 mod forward;
 mod hostkeys;
 mod import;
+mod keys;
 mod links;
 mod logging;
 mod secrets;
@@ -60,6 +61,69 @@ fn delete_session(store: State<'_, SessionStore>, id: Uuid) -> CmdResult<()> {
     store.delete(id).map_err(err)?;
     secrets::delete_all(id);
     Ok(())
+}
+
+#[tauri::command]
+async fn key_inspect(path: String, passphrase: Option<String>) -> CmdResult<keys::KeyInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keys::inspect(&keys::expand_home(&path), passphrase.as_deref())
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+async fn key_generate(
+    path: String,
+    kind: keys::KeyKind,
+    comment: String,
+    passphrase: Option<String>,
+) -> CmdResult<keys::KeyInfo> {
+    // RSA generation takes a moment; keep it off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        keys::generate(
+            &keys::expand_home(&path),
+            kind,
+            &comment,
+            passphrase.as_deref(),
+        )
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+async fn key_convert(
+    from: String,
+    passphrase: Option<String>,
+    to: String,
+    new_passphrase: Option<String>,
+) -> CmdResult<keys::KeyInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keys::convert(
+            &keys::expand_home(&from),
+            passphrase.as_deref(),
+            &keys::expand_home(&to),
+            new_passphrase.as_deref(),
+        )
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+async fn agent_status() -> keys::AgentStatus {
+    keys::agent_status().await
+}
+
+#[tauri::command]
+async fn agent_add(path: String, passphrase: Option<String>) -> CmdResult<()> {
+    keys::agent_add(&keys::expand_home(&path), passphrase.as_deref())
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -375,6 +439,11 @@ pub fn run() {
             save_snippet,
             delete_snippet,
             forget_secrets,
+            key_inspect,
+            key_generate,
+            key_convert,
+            agent_status,
+            agent_add,
             connect,
             send_input,
             resize,
