@@ -17,6 +17,7 @@ import { checkbox, confirm, el, field, showModal } from "./modal";
 import { Pane, type PaneHost } from "./pane";
 import { openTunnels, savedTunnelsEditor, tunnelsChanged } from "./tunnelUi";
 import { Broadcast } from "./broadcast";
+import { openKeyManager } from "./keyManager";
 import { report, stageLabel, type Step } from "./diagnostics";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
@@ -996,7 +997,7 @@ async function editSession(existing?: Partial<SavedSession>) {
   const host = el("input", { value: s.host, placeholder: "192.168.1.10 or myhost.tailnet.ts.net", spellcheck: "false" });
   const port = el("input", { value: String(s.port), type: "number", min: "1", max: "65535" });
   const user = el("input", { value: s.username, placeholder: "kali", spellcheck: "false" });
-  const auth = el("select", {}, el("option", { value: "password", text: "Password" }), el("option", { value: "key", text: "Private key" }));
+  const auth = el("select", {}, el("option", { value: "password", text: "Password" }), el("option", { value: "key", text: "Private key" }), el("option", { value: "agent", text: "SSH agent / Pageant" }));
   auth.value = s.auth;
   const keyPath = el("input", { value: s.keyPath ?? "", placeholder: "~/.ssh/id_ed25519 or a .ppk file", spellcheck: "false" });
   const browse = el("button", { class: "btn", type: "button", text: "Browse…" });
@@ -1004,7 +1005,7 @@ async function editSession(existing?: Partial<SavedSession>) {
     const picked = await openFileDialog({ multiple: false, directory: false, title: "Choose a private key" });
     if (typeof picked === "string") keyPath.value = picked;
   });
-  const keyField = field("Key file", el("div", { class: "inline" }, keyPath, browse), "OpenSSH or PuTTY (.ppk) format. You'll be asked for the passphrase if it has one.");
+  const keyField = field("Key file", el("div", { class: "inline" }, keyPath, browse), "OpenSSH or PuTTY (.ppk) format. You'll be asked for the passphrase if it has one. File → SSH keys can create one.");
   const syncKey = () => (keyField.hidden = auth.value !== "key");
   auth.addEventListener("change", syncKey);
   syncKey();
@@ -1195,6 +1196,7 @@ const menus: Menu[] = [
       { label: "New session…", run: () => editSession() },
       { label: "Quick connect", run: focusQuickConnect },
       { label: "Import sessions…", run: () => void importSessions() },
+      { label: "SSH keys…", run: () => void openKeyManager() },
       "-",
       { label: "Settings…", shortcut: "Ctrl+,", run: () => void openSettings() },
       "-",

@@ -5,7 +5,7 @@ import type { Listing, TransferEvent } from "./files";
 import type { Forward, TunnelStatus } from "./tunnels";
 import type { Stage } from "./diagnostics";
 
-export type AuthMethod = "password" | "key";
+export type AuthMethod = "password" | "key" | "agent";
 
 export interface SavedSession {
   id: string;
@@ -139,4 +139,39 @@ export const api = {
   sftpCancel: (transfer: number) => invoke<void>("sftp_cancel", { transfer }),
   localKind: (path: string) => invoke<"file" | "dir" | "missing">("local_kind", { path }),
   defaultDownloadDir: () => invoke<string | null>("default_download_dir"),
+  keyInspect: (path: string, passphrase: string | null) => invoke<KeyInfo>("key_inspect", { path, passphrase }),
+  keyGenerate: (path: string, kind: KeyKind, comment: string, passphrase: string | null) =>
+    invoke<KeyInfo>("key_generate", { path, kind, comment, passphrase }),
+  keyConvert: (from: string, passphrase: string | null, to: string, newPassphrase: string | null) =>
+    invoke<KeyInfo>("key_convert", { from, passphrase, to, newPassphrase }),
+  agentStatus: () => invoke<AgentStatus>("agent_status"),
+  agentAdd: (path: string, passphrase: string | null) => invoke<void>("agent_add", { path, passphrase }),
 };
+
+export type KeyKind = "ed25519" | "ecdsa256" | "rsa4096";
+
+/** What a key file holds. Never includes private material. */
+export interface KeyInfo {
+  format: string;
+  algorithm: string;
+  bits: number | null;
+  fingerprint: string;
+  comment: string;
+  encrypted: boolean;
+  needsPassphrase: boolean;
+  publicLine: string;
+}
+
+export interface AgentKey {
+  algorithm: string;
+  bits: number | null;
+  fingerprint: string;
+  comment: string;
+  certificate: boolean;
+}
+
+export interface AgentStatus {
+  kind: string | null;
+  error: string | null;
+  keys: AgentKey[];
+}

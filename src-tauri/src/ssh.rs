@@ -937,6 +937,14 @@ async fn authenticate(handle: &mut client::Handle<Handler>, ctx: &ConnCtx) -> an
         }
     }
 
+    if ctx.req.auth == AuthMethod::Agent && methods.contains(&MethodKind::PublicKey) {
+        match try_agent(handle, ctx, &user).await? {
+            Some(true) => return Ok(true),
+            Some(false) => ctx.status("The agent's keys weren't accepted; trying password"),
+            None => {}
+        }
+    }
+
     if methods.contains(&MethodKind::KeyboardInteractive) {
         match try_keyboard_interactive(handle, ctx, &user).await? {
             Some(true) => return Ok(true),
@@ -949,6 +957,63 @@ async fn authenticate(handle: &mut client::Handle<Handler>, ctx: &ConnCtx) -> an
         return try_password(handle, ctx, &user).await;
     }
     Ok(false)
+}
+
+/// Offers each key the agent holds. Returns None when there's no agent or it
+/// holds no keys (already reported in the terminal), Some(false) when the
+/// server turned every key down.
+async fn try_agent(
+    handle: &mut client::Handle<Handler>,
+    ctx: &ConnCtx,
+    user: &str,
+) -> anyhow::Result<Option<bool>> {
+    let (mut agent, kind) = match crate::keys::agent().await {
+        Ok(a) => a,
+        Err(e) => {
+            ctx.status(format!("{e:#}"));
+            return Ok(None);
+        }
+    };
+    let ids = match agent.request_identities().await {
+        Ok(ids) => ids,
+        Err(e) => {
+            ctx.status(format!(
+                "The {kind} didn't list its keys (it may be locked): {e}"
+            ));
+            return Ok(None);
+        }
+    };
+    if ids.is_empty() {
+        ctx.status(format!(
+            "The {kind} holds no keys. Add one with ssh-add or in SSH keys."
+        ));
+        return Ok(None);
+    }
+    let hash = handle.best_supported_rsa_hash().await?.flatten();
+    // Servers allow only a few tries, so stop at five keys.
+    for id in ids.iter().take(5) {
+        let russh::keys::agent::AgentIdentity::PublicKey { key, comment } = id else {
+            continue;
+        };
+        let label = if comment.is_empty() {
+            key.fingerprint(russh::keys::HashAlg::Sha256).to_string()
+        } else {
+            comment.clone()
+        };
+        ctx.status(format!("Trying {label} from the {kind}…"));
+        match handle
+            .authenticate_publickey_with(user, key.clone(), hash, &mut agent)
+            .await
+        {
+            Ok(client::AuthResult::Success) => return Ok(Some(true)),
+            Ok(client::AuthResult::Failure { .. }) => {}
+            Err(russh::AgentAuthError::Send(_)) => {
+                anyhow::bail!("The connection closed while logging in")
+            }
+            Err(e) => ctx.status(format!("The {kind} couldn't sign with {label}: {e}")),
+        }
+    }
+    Ok(Some(false))
 }
 
 enum KeyOutcome {
@@ -964,7 +1029,8 @@ async fn try_key(
     path: &str,
 ) -> anyhow::Result<KeyOutcome> {
     let session = ctx.req.session_id;
-    let key = match keys::load_secret_key(path, None) {
+    let expanded = crate::keys::expand_home(path);
+    let key = match keys::load_secret_key(&expanded, None) {
         Ok(k) => k,
         Err(keys::Error::KeyIsEncrypted) => {
             let mut stored = session.and_then(|s| secrets::get(s, SecretKind::Passphrase));
@@ -987,7 +1053,7 @@ async fn try_key(
                         (a.values.into_iter().next().unwrap_or_default(), a.save)
                     }
                 };
-                if let Ok(k) = keys::load_secret_key(path, Some(&passphrase)) {
+                if let Ok(k) = keys::load_secret_key(&expanded, Some(&passphrase)) {
                     if let (true, Some(s)) = (save, session) {
                         secrets::set(s, SecretKind::Passphrase, &passphrase)?;
                     }
@@ -1639,6 +1705,81 @@ mod live {
                 _ => {}
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_login_uses_keys_from_the_agent() {
+        let Some(env) = env() else {
+            eprintln!("GHOSTKEY_TEST_HOST not set; skipping live agent test");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("agent.sock");
+        let Ok(mut agent) = std::process::Command::new("ssh-agent")
+            .arg("-D")
+            .arg("-a")
+            .arg(&sock)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+        else {
+            eprintln!("ssh-agent not available; skipping live agent test");
+            return;
+        };
+        for _ in 0..50 {
+            if sock.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let _env = crate::keys::AGENT_ENV.lock().await;
+        let saved = std::env::var_os("SSH_AUTH_SOCK");
+        unsafe { std::env::set_var("SSH_AUTH_SOCK", &sock) };
+
+        let ssh = Arc::new(Ssh::new(
+            dir.path().join("known_hosts"),
+            dir.path().join("logs"),
+        ));
+        let no_password = |p: &Prompt| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            other => panic!("the agent should log in without asking: {other:?}"),
+        };
+
+        // An empty agent falls back to the password.
+        let (_, mut rx) = start(&ssh, &env, AuthMethod::Agent, Arc::default());
+        let pw = env.password.clone();
+        let (kinds, _, failed) = drive(&ssh, &mut rx, |p| match p {
+            Prompt::HostKey { .. } => yes(&[]),
+            _ => yes(&[&pw]),
+        })
+        .await;
+        assert_eq!(failed, None);
+        assert!(
+            kinds
+                .iter()
+                .any(|k| k == "password" || k == "keyboardInteractive"),
+            "{kinds:?}"
+        );
+
+        // With the key in the agent, no password or passphrase is asked for.
+        crate::keys::agent_add(std::path::Path::new(&env.key), Some(&env.passphrase))
+            .await
+            .unwrap();
+        let status = crate::keys::agent_status().await;
+        assert_eq!(
+            (status.kind.as_deref(), status.keys.len()),
+            (Some("ssh-agent"), 1)
+        );
+        let (id, mut rx) = start(&ssh, &env, AuthMethod::Agent, Arc::default());
+        assert_eq!(drive(&ssh, &mut rx, no_password).await.2, None);
+        ssh.close(id);
+
+        match saved {
+            Some(v) => unsafe { std::env::set_var("SSH_AUTH_SOCK", v) },
+            None => unsafe { std::env::remove_var("SSH_AUTH_SOCK") },
+        }
+        let _ = agent.kill();
+        let _ = agent.wait();
     }
 
     #[tokio::test]

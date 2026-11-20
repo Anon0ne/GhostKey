@@ -1458,3 +1458,25 @@ textarea.snippet-input:focus {
   user-select: text;
 }
 .diag-copy { display: flex; align-items: center; gap: 10px; }
+
+/* SSH keys window */
+.key-manager { display: grid; gap: 14px; max-height: 62vh; overflow: auto; padding-right: 4px; }
+.key-section { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: grid; gap: 8px; }
+.key-section h3 { margin: 0; font-size: 14px; }
+.key-section > .btn { justify-self: start; }
+.key-line { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; margin: 0; }
+.key-public {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  margin: 4px 0;
+}
+.key-details { display: grid; gap: 4px; }
+.key-details p { margin: 0; }
+.key-details .btn { justify-self: start; }
+.agent-keys { margin: 4px 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }

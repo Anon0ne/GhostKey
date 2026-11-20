@@ -18,6 +18,8 @@ pub enum AuthMethod {
     Password,
     /// Private key file, with password as a fallback.
     Key,
+    /// Keys held by the system's SSH agent or Pageant, with password as a fallback.
+    Agent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

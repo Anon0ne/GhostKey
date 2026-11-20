@@ -35,7 +35,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
 | F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
 | F04 | Port forwarding and jump hosts | Done | Claude | #13 (merged) | Follow-up: multi-hop jumps; import ProxyJump and *Forward from ~/.ssh/config |
-| F05 | SSH agent and key manager | Planned | Claude (beta queue) | — | Not started |
+| F05 | SSH agent and key manager | In progress | Claude | `ssh-keys` | Agent login (ssh-agent, Windows OpenSSH agent, Pageant), key inspect/generate/convert; awaiting review |
 | F06 | Broadcast input | In progress | Claude | `broadcast` | Chosen panes across tabs, bar and outlines, multi-destination paste/snippet review; awaiting review |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
@@ -460,3 +460,14 @@ Copy this block into a dated entry below when starting or stopping work:
     host, user and addresses unless asked, and always removes sign-in tokens and home folder
     names. Toolbar status reads "Failed: log in" etc.; Diagnostics button and Session menu
     item open the dialog. Live test `stages_show_where_a_connection_stopped`.
+  - F05 on `ssh-keys` (stacked on `diagnostics`): new `AuthMethod::Agent` ("SSH agent /
+    Pageant") offers up to five agent keys via `authenticate_publickey_with`, then falls back
+    to keyboard-interactive/password. `src-tauri/src/keys.rs` finds the agent (SSH_AUTH_SOCK;
+    on Windows the `openssh-ssh-agent` pipe, then Pageant), lists and adds keys, and inspects,
+    generates (Ed25519, ECDSA P-256, RSA 4096) and converts keys to OpenSSH. Files are created
+    with `create_new` (never replaced; private 0600 on Unix) and a failed `.pub` write removes
+    the private half. `~` expands in key paths, including session key files (this fixes
+    `~/.ssh/...` key paths at login). UI is `src/keyManager.ts` (File → SSH keys). Tests:
+    `keys::tests` (needs `ssh-keygen` for the PEM case) and live
+    `agent_login_uses_keys_from_the_agent` (needs `ssh-agent`). Not done: Pageant and the
+    Windows agent are untested here (no Windows box); PPK export isn't offered.
