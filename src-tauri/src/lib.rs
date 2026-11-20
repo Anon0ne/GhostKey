@@ -278,6 +278,12 @@ fn stop_log(ssh: State<'_, Arc<Ssh>>, id: u32) {
     ssh.stop_log(id);
 }
 
+/// Checks every connection now; the UI calls it after sleep or a network change.
+#[tauri::command]
+fn probe_connections(ssh: State<'_, Arc<Ssh>>) {
+    ssh.probe_all();
+}
+
 #[tauri::command]
 fn get_log_dir(settings: State<'_, SettingsState>) -> String {
     settings.log_dir().display().to_string()
@@ -350,6 +356,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            probe_connections,
             start_forward,
             stop_forward,
             sftp_list,

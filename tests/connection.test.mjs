@@ -5,7 +5,7 @@ import { load } from './load.mjs';
 const { Connection } = load('connection.ts');
 
 // A Connection with a fake native bridge that records every call.
-function client() {
+function client(extraHooks = {}) {
   const attempts = [], disconnected = [], sent = [], resized = [], logCalls = [], lines = [];
   const api = {
     connect(request, event, output) {
@@ -23,6 +23,7 @@ function client() {
     size: () => ({ cols: 80, rows: 24 }),
     showBanner() {}, hideBanner() {}, prompt() {},
     closePrompts() { promptsClosed++; }, changed() {},
+    ...extraHooks,
   };
   const conn = new Connection(api, hooks);
   return { conn, attempts, disconnected, sent, resized, logCalls, lines, promptsClosed: () => promptsClosed };
@@ -35,6 +36,121 @@ async function online(c, id = 1) {
   await p;
   c.attempts.at(-1).event({ type: 'connected' });
 }
+
+// A client that reconnects on its own, with timers the test fires by hand.
+function recovering() {
+  const timers = [];
+  const c = client({
+    autoReconnect: () => true,
+    schedule(fn, ms) {
+      const t = { fn, ms, cancelled: false };
+      timers.push(t);
+      return () => { t.cancelled = true; };
+    },
+  });
+  const fire = () => {
+    const t = timers.filter((x) => !x.cancelled).at(-1);
+    t.cancelled = true;
+    t.fn();
+  };
+  return { ...c, timers, fire };
+}
+
+test('a lost connection reconnects on its own with growing waits', async () => {
+  const c = recovering();
+  await online(c);
+  c.attempts[0].event({ type: 'closed', error: 'link down', lost: true, retryable: true });
+  assert.equal(c.conn.recovering, true);
+  assert.equal(c.conn.active, true);
+  assert.equal(c.conn.stopLabel, 'Cancel');
+  assert.equal(c.conn.retryLabel, 'Reconnect now');
+  assert.equal(c.timers[0].ms, 2000);
+  assert.match(c.conn.status, /Reconnecting in 2 s \(try 1 of 5\)/);
+  c.fire();
+  assert.equal(c.attempts.length, 2);
+  // The network is still down: the next wait is longer.
+  c.attempts[1].resolve(2);
+  await Promise.resolve();
+  c.attempts[1].event({ type: 'closed', error: 'unreachable', lost: false, retryable: true });
+  assert.equal(c.timers[1].ms, 4000);
+  c.fire();
+  c.attempts[2].resolve(3);
+  await Promise.resolve();
+  c.attempts[2].event({ type: 'connected' });
+  assert.equal(c.conn.online, true);
+  assert.equal(c.conn.recovering, false);
+  assert.ok(c.lines.some((l) => l.includes('new shell')));
+  // Settings are reused, and a later drop starts counting from the first try again.
+  assert.equal(c.attempts[2].request.sessionId, 'saved');
+  c.attempts[2].event({ type: 'closed', error: 'again', lost: true, retryable: true });
+  assert.equal(c.timers.at(-1).ms, 2000);
+});
+
+test('reconnecting gives up after the last try and on a refused login', async () => {
+  const c = recovering();
+  await online(c);
+  c.attempts[0].event({ type: 'closed', error: 'down', lost: true, retryable: true });
+  for (let i = 1; i <= 5; i++) {
+    c.fire();
+    c.attempts[i].resolve(i + 1);
+    await Promise.resolve();
+    c.attempts[i].event({ type: 'closed', error: 'unreachable', lost: false, retryable: true });
+  }
+  assert.equal(c.conn.recovering, false);
+  assert.equal(c.conn.state, 'error');
+  assert.equal(c.attempts.length, 6);
+  assert.ok(c.lines.some((l) => l.includes('Gave up')));
+
+  const d = recovering();
+  await online(d);
+  d.attempts[0].event({ type: 'closed', error: 'down', lost: true, retryable: true });
+  d.fire();
+  d.attempts[1].resolve(2);
+  await Promise.resolve();
+  d.attempts[1].event({ type: 'closed', error: 'Login cancelled', lost: false, retryable: false });
+  assert.equal(d.conn.recovering, false);
+  assert.equal(d.timers.filter((t) => !t.cancelled).length, 0);
+  assert.equal(d.conn.canRetry, true);
+});
+
+test('cancelling the wait stops reconnecting, and a shell exit never reconnects', async () => {
+  const c = recovering();
+  await online(c);
+  c.attempts[0].event({ type: 'closed', error: 'down', lost: true, retryable: true });
+  c.conn.disconnect();
+  assert.equal(c.conn.recovering, false);
+  assert.equal(c.conn.active, false);
+  assert.equal(c.timers[0].cancelled, true);
+  assert.equal(c.attempts.length, 1);
+
+  const e = recovering();
+  await online(e);
+  e.attempts[0].event({ type: 'closed', error: null, lost: false, retryable: false });
+  assert.equal(e.timers.length, 0);
+  assert.equal(e.conn.state, 'idle');
+
+  // Off in Settings: a lost connection just offers Reconnect.
+  const f = client({ autoReconnect: () => false });
+  await online(f);
+  f.attempts[0].event({ type: 'closed', error: 'down', lost: true, retryable: true });
+  assert.equal(f.conn.recovering, false);
+  assert.equal(f.conn.status, 'Connection lost');
+});
+
+test('reconnect now skips the wait, and a late event from the old attempt is ignored', async () => {
+  const c = recovering();
+  await online(c);
+  c.attempts[0].event({ type: 'closed', error: 'down', lost: true, retryable: true });
+  c.conn.retry();
+  assert.equal(c.timers[0].cancelled, true);
+  assert.equal(c.attempts.length, 2);
+  c.attempts[0].event({ type: 'connected' });
+  assert.equal(c.conn.connected, false);
+  c.attempts[1].resolve(2);
+  await Promise.resolve();
+  c.attempts[1].event({ type: 'connected' });
+  assert.equal(c.conn.online, true);
+});
 
 test('failed connection exposes retry and reuses connection settings', async () => {
   const c = client();

@@ -40,7 +40,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
 | F09 | Connection diagnostics | Planned | Claude (beta queue) | — | Define connection stages and redacted diagnostics |
-| F10 | Network recovery | Planned | Claude (beta queue, 2nd) | — | Define recovery policy and cancellation behavior |
+| F10 | Network recovery | In progress | Claude | `network-recovery` | Auto-reconnect with backoff, wake and network-change probes; awaiting review |
 | F11 | tmux integration | Planned | Claude (beta queue) | — | Define explicit attach/create flow |
 | F12 | Workspace layouts | Planned | Claude (beta queue) | — | Coordinate with F01's pane/session model |
 | F13 | Host identity guardrails | Planned | Claude (beta queue) | — | Define host labels and production designation |
@@ -433,3 +433,13 @@ Copy this block into a dated entry below when starting or stopping work:
     Changes preview live and Cancel restores them. Prefs live in web storage under
     `ghostkey.prefs`; the old `ghostkey.fontSize` is carried over. Window close needs
     `core:window:allow-close` for File → Quit.
+  - F10 on `network-recovery` (stacked on `menu-settings`): `ConnEvent::Closed` now carries
+    `lost` (the shell was up and the transport dropped without an exit status or a user
+    close) and `retryable` (a `NetworkError` from reaching the server, e.g. refused or timed
+    out). The UI reconnects after 2, 4, 8, 16 and 30 s while failures stay retryable, keeps
+    the scrollback, re-prompts for logins as usual, and stops on a refused or cancelled login,
+    on Cancel, or after the fifth try. A shell `exit` never reconnects. A 20 s gap in a 5 s
+    timer (sleep) or the browser `online` event calls `probe_connections`, which sends a
+    keepalive on every connection so dead links close at once; keepalive is now every 15 s.
+    Saved auto-start tunnels return because the original request is reused; temporary ones
+    don't. Setting: "Reconnect on its own" (on by default).
