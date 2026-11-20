@@ -34,7 +34,7 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F01 | Tabs and split panes | Done | Claude | #6 (merged) | Follow-up: move panes between tabs (not started) |
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
 | F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
-| F04 | Port forwarding and jump hosts | In progress | Claude | `forwarding` | Implemented; awaiting review. Multi-hop jumps and import of forwards not done |
+| F04 | Port forwarding and jump hosts | Done | Claude | #13 (merged) | Follow-up: multi-hop jumps; import ProxyJump and *Forward from ~/.ssh/config |
 | F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
@@ -411,6 +411,9 @@ Copy this block into a dated entry below when starting or stopping work:
   and right-click clipboard paste, plus focus guards for reconnect/dispose and
   pane/dialog changes. Both new browser checks and 54 frontend tests pass
   locally in Chromium; CI verifies WebKit and platform builds for v0.2.4.
+- 2026-10-28 — Claude: #12 (pane ×) and #13 (F04, with Anon0ne's remote-tunnel stop fix and
+  0.2.2 bump) merged. F04 marked Done. Claude is pausing new features at Justin's request;
+  F05/F06 are not started.
 - 2026-11-19 — Claude: Tailscale sign-in links opened twice in the browser. Each connection
   now remembers which links it opened and skips a banner identical to the last one, so a
-  repeated check-mode banner shows once and opens the browser once. Branch `tailscale-open-once`.
+  repeated check-mode banner shows once and opens the browser once. Merged as #17.
