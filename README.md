@@ -24,6 +24,8 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 - **SSH agent and keys (new):** sessions can log in with keys from ssh-agent, the Windows OpenSSH agent or Pageant (choose **SSH agent / Pageant** as the login method), falling back to a password. **File → SSH keys** shows the agent's keys, adds a key file to the agent, shows any key's type, fingerprint and public key, creates Ed25519, ECDSA or RSA keys with an optional passphrase, and saves a PuTTY, PEM or OpenSSH key as a new OpenSSH file with a new passphrase. GhostKey never replaces an existing file, private keys are written readable only by you, and keys held by the agent can't be exported. Key paths can start with `~`.
 - **Connection diagnostics (new):** when a connection fails, the toolbar says which stage it stopped at (looking up the address, the network connection, the SSH handshake, the server's identity, logging in, the jump host, or starting the shell) and the terminal suggests what to try next. **Diagnostics** (also in the Session menu) lists every stage with its timing and has **Copy diagnostics** for a report you can share. Host names, user names and addresses are left out unless you tick the box, and sign-in tokens and your local account name are always removed.
 - **Broadcast input (new):** type into several terminals at once, across tabs. Choose them in **Session → Broadcast input…** or with Ctrl+Shift+I. A yellow bar lists every terminal in the group and each one gets an outline. Pastes and snippets show every destination before anything is sent. A terminal that disconnects or reconnects leaves the group, so a new connection never joins without being chosen, and login prompts are never broadcast.
+- **Workspaces (new):** **File → Save workspace…** keeps your tabs and splits under a name, with the saved session each pane uses. **File → Open workspace…** shows every pane first and opens the layout in new tabs. Only the panes you tick connect; the rest wait with a **Connect** button, and production sessions start unticked. A workspace holds no passwords or commands.
+- **Profiles (new):** **File → Export profile…** saves your sessions, snippets and workspaces to one JSON file, and **Import profile…** brings them in on another computer. Before importing you see what's new, what differs from yours and what's already the same; your own versions are kept unless you choose to replace them, and nothing is deleted. Passwords and passphrases are never exported, and key paths under your home folder are written as `~/…`. Key files themselves aren't copied.
 - **Menu bar and Settings (new):** File, Edit, View, Session and Help menus across the top, like a normal desktop program. **File → Settings** (Ctrl+,) picks the theme (Kali Dark, Kali Light, Dracula, Solarized Dark, High contrast), font and size, cursor, scrollback, copy on select, a default user and port for Quick connect, and the log folder. Changes show as you make them, and Cancel puts them back. **View** hides the session list (Ctrl+Shift+B) or the snippet bar.
 
 | Tailscale sign-in | New host key | Session editor |
@@ -42,9 +44,9 @@ A modern SSH client for Windows and Linux that looks like the Kali Linux termina
 | --- | --- | --- |
 | ![Reconnecting after the connection dropped](docs/screenshots/reconnect.png) | ![One command typed into two terminals](docs/screenshots/broadcast.png) | ![Where a connection stopped, with a report to copy](docs/screenshots/diagnostics.png) |
 
-| SSH keys | Production warning |
-| --- | --- |
-| ![The agent's keys and a key file's fingerprint](docs/screenshots/ssh-keys.png) | ![Badges, tags and a snippet review for a production session](docs/screenshots/production.png) |
+| SSH keys | Production warning | Open workspace |
+| --- | --- | --- |
+| ![The agent's keys and a key file's fingerprint](docs/screenshots/ssh-keys.png) | ![Badges, tags and a snippet review for a production session](docs/screenshots/production.png) | ![A workspace's panes, ticked to connect](docs/screenshots/workspaces.png) |
 
 ## Install the alpha
 
@@ -88,6 +90,7 @@ Tagged releases (`v0.2.0` and so on) are published as draft pre-releases on the 
 | Passwords and passphrases | Your system keychain, under the service name "GhostKey" |
 | Settings | The log folder is in `settings.json` in the app config folder. Theme, font and the other Settings are stored by the app's web view on this computer |
 | Snippets | `snippets.json` in the app config folder |
+| Workspaces | `workspaces.json` in the app config folder |
 | Session logs | `Documents/GhostKey Logs` unless you pick another folder in Settings. Logs hold everything the server printed, which can include secrets |
 
 ## Building from source

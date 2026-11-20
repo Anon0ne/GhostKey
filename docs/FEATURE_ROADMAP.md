@@ -42,12 +42,12 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F09 | Connection diagnostics | In progress | Claude | `diagnostics` | Stage events, failure advice, redacted copyable report; awaiting review |
 | F10 | Network recovery | In progress | Claude | `network-recovery` | Auto-reconnect with backoff, wake and network-change probes; awaiting review |
 | F11 | tmux integration | Planned | Claude (beta queue) | — | Define explicit attach/create flow |
-| F12 | Workspace layouts | Planned | Claude (beta queue) | — | Coordinate with F01's pane/session model |
+| F12 | Workspace layouts | In progress | Claude | `profiles-workspaces` | Save/open tabs and splits by name; opening connects only ticked panes; awaiting review |
 | F13 | Host identity guardrails | In progress | Claude | `session-tags` | Environment badges in list/tab/toolbar, production warnings in snippets, paste and broadcast; awaiting review |
 | F14 | Searchable terminal history | In progress | Codex | `feature/paste-and-history` | Per-pane in-memory search implemented; review pending; persistent/all-pane history deferred |
 | F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
 | F16 | Evidence bookmarks | Planned | Claude (beta queue) | — | Define selection metadata and export format |
-| F17 | Portable session profiles | Planned | Claude (beta queue) | — | Define versioned export/import format |
+| F17 | Portable session profiles | In progress | Claude | `profiles-workspaces` | Versioned JSON (`ghostkey-profile` v1) of sessions, snippets, workspaces; no secrets; awaiting review |
 | F18 | Local terminal tabs | Planned | Claude (beta queue) | — | Define local PTY lifecycle on both platforms |
 | F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
 | F20 | Session tags | In progress | Claude | `session-tags` | Tags beside folders, searchable with #tag; awaiting review |
@@ -479,3 +479,15 @@ Copy this block into a dated entry below when starting or stopping work:
     session up live by `sessionId`, so edits relabel open tabs at once. Production: tab shows
     PROD if any pane in it is production; snippets to production always preview with Cancel as
     default; paste review and broadcast bar say so; broadcast choice needs an extra checkbox.
+  - F17 + F12 on `profiles-workspaces` (stacked on `session-tags`): `workspaces.json`
+    (`src-tauri/src/workspaces.rs`, version 1, newer versions refused) stores named layouts;
+    tabs are kept as JSON and checked in `src/workspace.ts` (`cleanWorkspace`: at most 50
+    tabs, depth 12). A leaf holds only a saved session id and label, never a request,
+    password or command. File → Open workspace previews every pane, flags sessions that no
+    longer exist, starts production panes unticked, and opens new tabs where unticked panes
+    are `Connection.prepare`d ("Connect" button, nothing sent). File → Export/Import profile
+    use `src/profile.ts`: format `ghostkey-profile` v1 with whitelisted fields, key paths
+    under home written as `~/…`; import refuses other formats and newer versions, sets aside
+    damaged entries, shows new / different / same counts, and replaces changed items only
+    when ticked. Nothing is deleted on import. `read_text_file` (5 MB, UTF-8) and
+    `write_text_file` (temp + rename) back the dialogs.

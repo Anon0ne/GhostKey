@@ -1509,3 +1509,35 @@ textarea.snippet-input:focus {
 #conn-env { margin-right: 6px; }
 .prod-warning { color: var(--error); font-weight: 600; }
 label.prod-warning[hidden] { display: none; }
+
+/* Workspaces and profiles */
+.ws-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 8px 0;
+}
+.ws-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.ws-tab .missing {
+  color: var(--muted);
+  font-style: italic;
+}
+.profile-summary {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+}
+.profile-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+}

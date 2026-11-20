@@ -5,7 +5,8 @@ import "./styles.css";
 
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import { homeDir } from "@tauri-apps/api/path";
 
 import { api, type ConnectRequest, type SavedSession } from "./api";
 import { ansi, type BaseRequest } from "./connection";
@@ -22,6 +23,8 @@ import { ENVIRONMENTS, envBadge, envInfo, isProduction, matchesSearch, parseTags
 import { report, stageLabel, type Step } from "./diagnostics";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MenuBar, type Menu } from "./menu";
+import { capture, cleanWorkspace, leaves, preview, restore, type Workspace } from "./workspace";
+import { buildProfile, compare, parseProfile, type ParseResult } from "./profile";
 import { DEFAULT_PREFS, FONT_CHOICES, loadPrefs, MAX_FONT_SIZE, MIN_FONT_SIZE, normalizePrefs, savePrefs, type CursorStyle, type Prefs } from "./prefs";
 import { THEME_IDS, THEMES, themeById } from "./theme";
 
@@ -978,16 +981,23 @@ function sessionRow(s: SavedSession): HTMLElement {
 }
 
 function connectSaved(s: SavedSession) {
+  const req = requestFor(s);
+  if (!req) {
+    void confirm("Jump host missing", `"${s.name}" connects through a saved session that no longer exists. Choose another jump host in its settings.`, "OK");
+    return;
+  }
+  openSession(req, s.name);
+}
+
+/** The connection settings for a saved session, or null when its jump host is gone. */
+function requestFor(s: SavedSession): BaseRequest | null {
   let jump: ConnectRequest["jump"] = null;
   if (s.jumpSession) {
     const j = sessions.find((x) => x.id === s.jumpSession);
-    if (!j) {
-      void confirm("Jump host missing", `"${s.name}" connects through a saved session that no longer exists. Choose another jump host in its settings.`, "OK");
-      return;
-    }
+    if (!j) return null;
     jump = { sessionId: j.id, host: j.host, port: j.port, username: j.username, auth: j.auth, keyPath: j.keyPath };
   }
-  openSession(
+  return (
     {
       sessionId: s.id,
       host: s.host,
@@ -1000,8 +1010,7 @@ function connectSaved(s: SavedSession) {
       label: s.name,
       forwards: s.forwards ?? [],
       jump,
-    },
-    s.name,
+    }
   );
 }
 
@@ -1171,6 +1180,247 @@ $("quick-connect").addEventListener("submit", (e) => {
 });
 $("quick-input").addEventListener("input", (e) => (e.target as HTMLElement).classList.remove("invalid"));
 
+// ---------------------------------------------------------------- workspaces and profiles
+
+/** What a pane points at, for saving it in a workspace. */
+function describePane(pane: Pane): { session: string | null; label: string } {
+  const req = pane.conn.request;
+  const saved = req?.sessionId ? sessions.find((s) => s.id === req.sessionId) : undefined;
+  return { session: saved?.id ?? null, label: saved?.name ?? (req ? pane.conn.title : "") };
+}
+
+async function loadWorkspaces(): Promise<Workspace[]> {
+  const raw = await api.listWorkspaces();
+  return raw.map((w) => cleanWorkspace(w)).filter((w): w is Workspace => w !== null);
+}
+
+async function saveWorkspaceDialog() {
+  let existing: Workspace[] = [];
+  try {
+    existing = await loadWorkspaces();
+  } catch (e) {
+    await confirm("Couldn't read workspaces", String(e), "OK");
+    return;
+  }
+  const saved = tabs.map((t) => capture(t.root, describePane));
+  const paneCount = saved.reduce((n, t) => n + leaves(t).length, 0);
+  const unsaved = saved.flatMap(leaves).filter((l) => l.session === null && l.label).length;
+  const name = el("input", { value: "", placeholder: "e.g. Client A lab", spellcheck: "false" });
+  const ok = await showModal<boolean>({
+    title: "Save workspace",
+    body: [
+      el("p", { text: `Saves ${tabs.length} ${tabs.length === 1 ? "tab" : "tabs"} and ${paneCount} ${paneCount === 1 ? "pane" : "panes"}, with the saved session each pane uses.` }),
+      field("Name", name, "Saving under an existing name replaces that workspace."),
+      ...(unsaved ? [el("p", { class: "hint", text: `${unsaved} ${unsaved === 1 ? "pane uses" : "panes use"} Quick connect, not a saved session, so ${unsaved === 1 ? "it opens" : "they open"} empty.` })] : []),
+      el("p", { class: "hint", text: "A workspace holds no passwords, and opening one connects nothing until you choose." }),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Save", value: () => true, primary: true },
+    ],
+    validate: () => (name.value.trim() ? null : "Give the workspace a name."),
+    onDismiss: () => false,
+  }).result;
+  if (!ok) return;
+  const same = existing.find((w) => w.name.toLowerCase() === name.value.trim().toLowerCase());
+  try {
+    await api.saveWorkspace({ id: same?.id ?? crypto.randomUUID(), name: name.value.trim(), tabs: saved });
+  } catch (e) {
+    await confirm("Couldn't save the workspace", String(e), "OK");
+  }
+}
+
+async function openWorkspaceDialog() {
+  let list: Workspace[];
+  try {
+    list = await loadWorkspaces();
+  } catch (e) {
+    await confirm("Couldn't read workspaces", String(e), "OK");
+    return;
+  }
+  if (!list.length) {
+    await confirm("Open workspace", "No saved workspaces yet. Arrange tabs and splits, then use File → Save workspace….", "OK");
+    return;
+  }
+  const ids = new Set(sessions.map((s) => s.id));
+  const picker = el("select", { "aria-label": "Workspace" }, ...list.map((w) => el("option", { value: w.id, text: w.name })));
+  const detail = el("div", { class: "ws-preview" });
+  let boxes: { leaf: { session: string | null; label: string }; box: HTMLInputElement }[] = [];
+  const chosen = () => list.find((w) => w.id === picker.value) ?? list[0];
+  const render = () => {
+    detail.replaceChildren();
+    boxes = [];
+    for (const tab of preview(chosen(), ids)) {
+      const rows = tab.panes.map((p) => {
+        const s = p.session ? sessions.find((x) => x.id === p.session) : undefined;
+        const text = s ? `${envBadge(s.environment) ? `${envBadge(s.environment)} ` : ""}${s.name}  ${s.username}@${s.host}${s.port === 22 ? "" : `:${s.port}`}` : p.missing ? `${p.label || "A session"} (no longer saved)` : "Empty pane";
+        const [row, box] = checkbox(text, !!s && !isProduction(s.environment));
+        box.disabled = !s;
+        if (p.missing) row.classList.add("missing");
+        boxes.push({ leaf: p, box });
+        return row;
+      });
+      detail.append(el("div", { class: "ws-tab" }, el("strong", { text: `Tab ${tab.tab}` }), ...rows));
+    }
+  };
+  picker.addEventListener("change", render);
+  render();
+  const choice = await showModal<"cancel" | "open" | "connect" | "delete">({
+    title: "Open workspace",
+    wide: true,
+    body: [
+      field("Workspace", picker),
+      el("p", { class: "hint", text: "Opens in new tabs. Tick the panes to connect now; the rest wait with a Connect button. Production sessions start unticked." }),
+      detail,
+    ],
+    buttons: [
+      { label: "Delete", value: () => "delete" },
+      { label: "Cancel", value: () => "cancel" },
+      { label: "Open", value: () => "open" },
+      { label: "Open and connect ticked", value: () => "connect", primary: true },
+    ],
+    onDismiss: () => "cancel",
+  }).result;
+  const w = chosen();
+  if (choice === "cancel") return;
+  if (choice === "delete") {
+    if (await confirm("Delete workspace", `Delete the workspace "${w.name}"? Its sessions stay saved.`, "Delete", true)) {
+      await api.deleteWorkspace(w.id).catch((e) => confirm("Couldn't delete the workspace", String(e), "OK"));
+    }
+    return;
+  }
+  const connectNow = new Set(choice === "connect" ? boxes.filter((b) => b.box.checked).map((b) => b.leaf) : []);
+  const queue = [...boxes.map((b) => b.leaf)];
+  const toConnect: Pane[] = [];
+  for (const saved of w.tabs) {
+    const root = restore(saved, () => {
+      const leafInfo = queue.shift();
+      const pane = new Pane(host);
+      const s = leafInfo?.session ? sessions.find((x) => x.id === leafInfo.session) : undefined;
+      const req = s ? requestFor(s) : null;
+      if (s && req) {
+        pane.conn.prepare(req, s.name);
+        pane.waiting(s.name);
+        if (leafInfo && connectNow.has(leafInfo)) toConnect.push(pane);
+      } else {
+        pane.welcome();
+      }
+      return pane;
+    });
+    const first = panes(root)[0];
+    const tab: Tab = { root, active: first, el: el("div", { class: "tab-body", hidden: true }) };
+    $("workspace").append(tab.el);
+    tabs.push(tab);
+    renderLayout(tab);
+    selectTab(tab);
+  }
+  // Connect after layout, so each terminal knows its size.
+  requestAnimationFrame(() => toConnect.forEach((p) => p.conn.retry()));
+}
+
+async function exportProfile() {
+  let data: { sessions: SavedSession[]; snippets: Snippet[]; workspaces: Workspace[] };
+  try {
+    data = { sessions: await api.listSessions(), snippets: await api.listSnippets(), workspaces: await loadWorkspaces() };
+  } catch (e) {
+    await confirm("Couldn't read your settings", String(e), "OK");
+    return;
+  }
+  const ok = await confirm(
+    "Export profile",
+    `Saves ${data.sessions.length} sessions, ${data.snippets.length} snippets and ${data.workspaces.length} workspaces to one file you can import on another computer.\n\nPasswords and passphrases are never exported. Host names, usernames and snippet commands are, so keep the file somewhere private.`,
+    "Choose where to save…",
+  );
+  if (!ok) return;
+  const path = await saveFileDialog({ title: "Export GhostKey profile", defaultPath: "ghostkey-profile.json", filters: [{ name: "GhostKey profile", extensions: ["json"] }] });
+  if (!path) return;
+  let home = "";
+  try {
+    home = await homeDir();
+  } catch {
+    // Without a home folder, key paths are written as they are.
+  }
+  try {
+    await api.writeTextFile(path, JSON.stringify(buildProfile(data, home), null, 2));
+    await confirm("Profile exported", `Saved to ${path}.`, "OK");
+  } catch (e) {
+    await confirm("Couldn't export the profile", String(e), "OK");
+  }
+}
+
+async function importProfile() {
+  const path = await openFileDialog({ multiple: false, directory: false, title: "Import GhostKey profile", filters: [{ name: "GhostKey profile", extensions: ["json"] }] });
+  if (typeof path !== "string") return;
+  let parsed: ParseResult;
+  let mine: { sessions: SavedSession[]; snippets: Snippet[]; workspaces: Workspace[] };
+  try {
+    parsed = parseProfile(await api.readTextFile(path));
+    mine = { sessions: await api.listSessions(), snippets: await api.listSnippets(), workspaces: await loadWorkspaces() };
+  } catch (e) {
+    await confirm("Couldn't read the profile", String(e), "OK");
+    return;
+  }
+  if (!parsed.ok) {
+    await confirm("Couldn't import the profile", parsed.error, "OK");
+    return;
+  }
+  const p = parsed.profile;
+  const count = <T extends { id: string }>(items: T[], existing: T[]) => {
+    const states = items.map((x) => compare(x, existing));
+    return { items, states, new: states.filter((s) => s === "new").length, changed: states.filter((s) => s === "changed").length, same: states.filter((s) => s === "same").length };
+  };
+  const parts = [
+    { label: "Sessions", ...count(p.sessions, mine.sessions), save: (x: SavedSession) => api.saveSession(x) },
+    { label: "Snippets", ...count(p.snippets, mine.snippets), save: (x: Snippet) => api.saveSnippet(x) },
+    { label: "Workspaces", ...count(p.workspaces, mine.workspaces), save: (x: Workspace) => api.saveWorkspace(x) },
+  ] as const;
+  const anyChanged = parts.some((x) => x.changed > 0);
+  const [replaceRow, replace] = checkbox("Replace my changed items with the imported ones");
+  replaceRow.hidden = !anyChanged;
+  const table = el(
+    "div",
+    { class: "profile-summary" },
+    ...parts.map((x) => el("div", { class: "profile-row" }, el("strong", { text: x.label }), el("span", { text: `${x.new} new · ${x.changed} different from yours · ${x.same} already the same` }))),
+  );
+  const missingKeys = p.sessions.filter((s) => s.auth === "key").length;
+  const ok = await showModal<boolean>({
+    title: "Import profile",
+    wide: true,
+    body: [
+      el("p", { text: p.exportedAt ? `Exported ${new Date(p.exportedAt).toLocaleString()}.` : "Exported at an unknown time." }),
+      table,
+      replaceRow,
+      ...(parsed.skipped.length ? [el("p", { class: "hint", text: `Skipped because they're damaged: ${parsed.skipped.join("; ")}` })] : []),
+      ...(missingKeys ? [el("p", { class: "hint", text: "Key files aren't in the profile. Copy them to the same place on this computer (paths under your home folder are written as ~/…)." })] : []),
+      el("p", { class: "hint", text: "Nothing you have is deleted. Passwords aren't in the file, so GhostKey asks for them on first connect." }),
+    ],
+    buttons: [
+      { label: "Cancel", value: () => false },
+      { label: "Import", value: () => true, primary: true },
+    ],
+    onDismiss: () => false,
+  }).result;
+  if (!ok) return;
+  const failed: string[] = [];
+  let done = 0;
+  for (const part of parts) {
+    for (let i = 0; i < part.items.length; i++) {
+      const state = part.states[i];
+      if (state === "same" || (state === "changed" && !replace.checked)) continue;
+      const item = part.items[i];
+      try {
+        await (part.save as (x: typeof item) => Promise<void>)(item);
+        done++;
+      } catch (e) {
+        failed.push(`${(item as { name: string }).name}: ${e}`);
+      }
+    }
+  }
+  await refreshSessions();
+  await refreshSnippets();
+  await confirm(failed.length ? "Profile partly imported" : "Profile imported", `${done} ${done === 1 ? "item" : "items"} added or updated.${failed.length ? `\n\nNot imported:\n${failed.join("\n")}` : ""}`, "OK");
+}
+
 // ---------------------------------------------------------------- menu bar
 
 const REPO_URL = "https://github.com/Anon0ne/GhostKey";
@@ -1243,6 +1493,11 @@ const menus: Menu[] = [
       { label: "Quick connect", run: focusQuickConnect },
       { label: "Import sessions…", run: () => void importSessions() },
       { label: "SSH keys…", run: () => void openKeyManager() },
+      "-",
+      { label: "Open workspace…", run: () => void openWorkspaceDialog() },
+      { label: "Save workspace…", run: () => void saveWorkspaceDialog() },
+      { label: "Export profile…", run: () => void exportProfile() },
+      { label: "Import profile…", run: () => void importProfile() },
       "-",
       { label: "Settings…", shortcut: "Ctrl+,", run: () => void openSettings() },
       "-",

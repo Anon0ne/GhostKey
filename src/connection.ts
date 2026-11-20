@@ -91,6 +91,7 @@ export class Connection {
 
   get retryLabel() {
     if (this.recovering) return "Reconnect now";
+    if (this.trace.outcome === "none") return "Connect";
     return this.connected ? "Reconnect" : "Retry connection";
   }
 
@@ -110,6 +111,17 @@ export class Connection {
     this.state = state;
     this.status = status;
     this.hooks.changed();
+  }
+
+  /** Sets up a session to connect later, e.g. from a workspace, without connecting. */
+  prepare(req: BaseRequest, title: string) {
+    if (this.active) return;
+    this.request = { ...req };
+    this.title = title;
+    this.closed = true;
+    this.connected = false;
+    this.trace = new Trace();
+    this.set("idle", "Not connected yet");
   }
 
   async connect(req: BaseRequest, title: string) {

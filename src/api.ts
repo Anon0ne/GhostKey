@@ -5,6 +5,7 @@ import type { Listing, TransferEvent } from "./files";
 import type { Forward, TunnelStatus } from "./tunnels";
 import type { Stage } from "./diagnostics";
 import type { Environment } from "./hostLabels";
+import type { Workspace } from "./workspace";
 
 export type AuthMethod = "password" | "key" | "agent";
 
@@ -148,6 +149,11 @@ export const api = {
     invoke<KeyInfo>("key_generate", { path, kind, comment, passphrase }),
   keyConvert: (from: string, passphrase: string | null, to: string, newPassphrase: string | null) =>
     invoke<KeyInfo>("key_convert", { from, passphrase, to, newPassphrase }),
+  listWorkspaces: () => invoke<unknown[]>("list_workspaces"),
+  saveWorkspace: (workspace: Workspace) => invoke<void>("save_workspace", { workspace }),
+  deleteWorkspace: (id: string) => invoke<void>("delete_workspace", { id }),
+  readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
+  writeTextFile: (path: string, text: string) => invoke<void>("write_text_file", { path, text }),
   agentStatus: () => invoke<AgentStatus>("agent_status"),
   agentAdd: (path: string, passphrase: string | null) => invoke<void>("agent_add", { path, passphrase }),
 };
