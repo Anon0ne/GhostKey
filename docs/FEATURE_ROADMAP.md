@@ -35,20 +35,24 @@ release ownership. This file was initialized on 2026-10-27 from the planning con
 | F02 | Session logging | Done | Claude | #6 (merged) | Follow-up: raw logs and per-line timestamps, with F14/F16 |
 | F03 | SFTP file browser | Done | Claude | #10 (merged) | Follow-up: folder transfers; check drag and drop on desktops |
 | F04 | Port forwarding and jump hosts | Done | Claude | #13 (merged) | Follow-up: multi-hop jumps; import ProxyJump and *Forward from ~/.ssh/config |
-| F05 | SSH agent and key manager | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
-| F06 | Broadcast input | Planned | Claude (queued after F01/F02) | — | Not started; no local work exists yet |
+| F05 | SSH agent and key manager | Planned | Claude (beta queue) | — | Not started |
+| F06 | Broadcast input | Planned | Claude (beta queue, 3rd) | — | Not started |
 | F07 | Import PuTTY and SSH config sessions | Done | Claude | #7 (merged) | Follow-up: try the PuTTY registry import on Windows |
 | F08 | Command snippets and button bar | Done | Claude | #9 (merged) | Follow-up: placeholders |
-| F09 | Connection diagnostics | Planned | — | — | Define connection stages and redacted diagnostics |
-| F10 | Network recovery | Planned | — | — | Define recovery policy and cancellation behavior |
-| F11 | tmux integration | Planned | — | — | Define explicit attach/create flow |
-| F12 | Workspace layouts | Planned | — | — | Coordinate with F01's pane/session model |
-| F13 | Host identity guardrails | Planned | — | — | Define host labels and production designation |
+| F09 | Connection diagnostics | Planned | Claude (beta queue) | — | Define connection stages and redacted diagnostics |
+| F10 | Network recovery | Planned | Claude (beta queue, 2nd) | — | Define recovery policy and cancellation behavior |
+| F11 | tmux integration | Planned | Claude (beta queue) | — | Define explicit attach/create flow |
+| F12 | Workspace layouts | Planned | Claude (beta queue) | — | Coordinate with F01's pane/session model |
+| F13 | Host identity guardrails | Planned | Claude (beta queue) | — | Define host labels and production designation |
 | F14 | Searchable terminal history | In progress | Codex | `feature/paste-and-history` | Per-pane in-memory search implemented; review pending; persistent/all-pane history deferred |
 | F15 | Safe paste preview | In progress | Codex | `feature/paste-and-history` | Clipboard and native paste guards implemented; review pending; integrate future snippets/broadcast |
-| F16 | Evidence bookmarks | Planned | — | — | Define selection metadata and export format |
-| F17 | Portable session profiles | Planned | — | — | Define versioned export/import format |
-| F18 | Local terminal tabs | Planned | — | — | Define local PTY lifecycle on both platforms |
+| F16 | Evidence bookmarks | Planned | Claude (beta queue) | — | Define selection metadata and export format |
+| F17 | Portable session profiles | Planned | Claude (beta queue) | — | Define versioned export/import format |
+| F18 | Local terminal tabs | Planned | Claude (beta queue) | — | Define local PTY lifecycle on both platforms |
+| F19 | Menu bar and Settings | In progress | Claude | `menu-settings` | Themes, fonts, cursor, scrollback, copy on select, connection defaults; awaiting review |
+| F20 | Session tags | Planned | Claude (beta queue) | — | Tags beside the existing folders, searchable |
+| F21 | Auto-update | Planned | Claude (beta queue) | — | Tauri updater against GitHub releases; needs a signing key |
+| F22 | Serial and Telnet connections | Planned | Claude (beta queue) | — | Serial ports and Telnet as session types |
 
 ## Feature definitions and acceptance criteria
 
@@ -417,3 +421,15 @@ Copy this block into a dated entry below when starting or stopping work:
 - 2026-11-19 — Claude: Tailscale sign-in links opened twice in the browser. Each connection
   now remembers which links it opened and skips a banner identical to the last one, so a
   repeated check-mode banner shows once and opens the browser once. Merged as #17.
+- 2026-11-20 — Claude: Justin asked for every unbuilt feature, then a beta. Claude owns the
+  queue in this order: F19 menu bar and Settings, F10 network recovery, F06 broadcast, F09,
+  F05, F20 tags with F13, F17 with F12, multi-hop jumps and SFTP folder transfer and moving
+  panes between tabs, F11 with F16, F18 with F22, F21, then the beta release. Codex: please
+  say here before starting any of these so work doesn't overlap.
+  - F19 on `menu-settings`: an HTML menu bar (File, Edit, View, Session, Help) with keyboard
+    navigation; F10 opens it outside the terminal. Settings has five themes (terminal palette
+    plus shell CSS variables), font, size, cursor style and blink, scrollback, copy on select,
+    session list and snippet bar visibility, default user and port, and the log folder.
+    Changes preview live and Cancel restores them. Prefs live in web storage under
+    `ghostkey.prefs`; the old `ghostkey.fontSize` is carried over. Window close needs
+    `core:window:allow-close` for File → Quit.
