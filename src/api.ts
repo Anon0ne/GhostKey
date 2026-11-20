@@ -52,7 +52,8 @@ export interface ConnectRequest {
   label: string;
   /** Tunnels to start when the shell opens (those set to start automatically). */
   forwards: Forward[];
-  jump: JumpRequest | null;
+  /** Jump hosts to go through first, outermost first. Empty connects directly. */
+  jumps: JumpRequest[];
   cols: number;
   rows: number;
 }

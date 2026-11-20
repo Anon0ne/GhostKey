@@ -491,3 +491,15 @@ Copy this block into a dated entry below when starting or stopping work:
     damaged entries, shows new / different / same counts, and replaces changed items only
     when ticked. Nothing is deleted on import. `read_text_file` (5 MB, UTF-8) and
     `write_text_file` (temp + rename) back the dialogs.
+  - Multi-hop, SFTP folders and moving panes on `multi-hop` (stacked on
+    `profiles-workspaces`): `ConnectRequest.jump` became `jumps: Vec<JumpRequest>`
+    (outermost first, at most 5); `run` logs in to each hop and opens the next through the
+    previous one with `open_through` (direct-tcpip), and closes them inside out. The UI
+    follows `jumpSession` links (`src/jumps.ts`: `jumpChain` refuses missing hosts, loops and
+    more than 5; `jumpChoices` hides sessions that route through the one being edited) and
+    the editor shows the route. SFTP `download`/`upload` now take folders: the tree is walked
+    first (no links followed, 50,000 entries, 32 levels), server names that aren't one plain
+    path part are refused, existing folders are an error unless merging was confirmed, and
+    progress covers the whole folder. View → Move pane to new tab / to tab… re-parents a live
+    pane. Live tests: `tunnels_and_jump_host` now goes through two hops;
+    `sftp_round_trip_overwrite_and_cancel` covers nested folders both ways.
