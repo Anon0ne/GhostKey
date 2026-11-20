@@ -1,6 +1,6 @@
 // A terminal pane: its own xterm, Tailscale banner, login prompts, and Connection.
 
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import { SearchAddon } from "@xterm/addon-search";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -15,6 +15,10 @@ import { FONT_FAMILY, kaliDark } from "./theme";
 
 export interface PaneHost {
   fontSize(): number;
+  /** Theme, font, cursor and scrollback from Settings. */
+  termOptions?(): ITerminalOptions;
+  /** Copy the selection as soon as it is made. */
+  copyOnSelect?(): boolean;
   /** The pane wants focus, e.g. to show a login prompt. */
   activate(pane: Pane): void;
   changed(pane: Pane): void;
@@ -97,11 +101,12 @@ export class Pane {
     this.term = new Terminal({
       theme: kaliDark,
       fontFamily: FONT_FAMILY,
-      fontSize: host.fontSize(),
       fontWeight: "normal",
       fontWeightBold: "bold",
       cursorBlink: true,
       scrollback: 10000,
+      ...host.termOptions?.(),
+      fontSize: host.fontSize(),
       allowProposedApi: false,
     });
     this.term.loadAddon(this.fitAddon);
@@ -135,6 +140,9 @@ export class Pane {
     });
 
     this.term.onData((data) => this.conn.input(data));
+    this.term.onSelectionChange?.(() => {
+      if (host.copyOnSelect?.() && this.term.hasSelection()) void Promise.resolve(writeText(this.term.getSelection())).catch(() => {});
+    });
     this.term.onResize(({ cols, rows }) => this.conn.resize(cols, rows));
     this.term.attachCustomKeyEventHandler((e) => this.onKey(e));
     this.el.addEventListener("mousedown", () => host.activate(this));
@@ -177,6 +185,12 @@ export class Pane {
 
   setFontSize(size: number) {
     this.term.options.fontSize = size;
+    this.fit();
+  }
+
+  /** Applies changed Settings to this terminal. */
+  applyOptions(options: ITerminalOptions) {
+    Object.assign(this.term.options, options);
     this.fit();
   }
 

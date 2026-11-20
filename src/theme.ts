@@ -1,5 +1,17 @@
 import type { ITheme } from "@xterm/xterm";
 
+export const FONT_FAMILY = '"Fira Code", "DejaVu Sans Mono", Consolas, monospace';
+
+/** A color scheme for the terminal and the app around it. */
+export interface Theme {
+  id: string;
+  label: string;
+  term: ITheme;
+  /** CSS variables for the app shell (see :root in styles.css). */
+  chrome: Record<string, string>;
+  dark: boolean;
+}
+
 /**
  * Kali-Dark, from Kali's QTerminal color scheme
  * (kali-themes: share/qtermwidget6/color-schemes/Kali-Dark.colorscheme).
@@ -28,6 +40,191 @@ export const kaliDark: ITheme = {
   brightWhite: "#FFFFFF",
 };
 
-/** Kali's QTerminal default is Fira Code 10 pt, which is about 13.3 px. */
-export const DEFAULT_FONT_SIZE = 14;
-export const FONT_FAMILY = '"Fira Code", "DejaVu Sans Mono", Consolas, monospace';
+const darkChrome = {
+  "--bg": "#23252e",
+  "--bg-deep": "#1b1d24",
+  "--panel": "#2a2d38",
+  "--panel-hover": "#323644",
+  "--border": "#3a3e4c",
+  "--text": "#e6e6e6",
+  "--muted": "#9aa0ae",
+  "--accent": "#367bf0",
+  "--accent-hover": "#277fff",
+  "--green": "#5ebdab",
+  "--yellow": "#fea44c",
+  "--red": "#d41919",
+  "--error": "#ff6b6b",
+};
+
+export const THEMES: Theme[] = [
+  { id: "kali-dark", label: "Kali Dark", dark: true, term: kaliDark, chrome: darkChrome },
+  {
+    id: "kali-light",
+    label: "Kali Light",
+    dark: false,
+    term: {
+      background: "#F7F7F9",
+      foreground: "#1F2229",
+      cursor: "#1F2229",
+      cursorAccent: "#F7F7F9",
+      selectionBackground: "#367BF040",
+      black: "#1F2229",
+      red: "#C01818",
+      green: "#1E8A75",
+      yellow: "#B86200",
+      blue: "#2662CC",
+      magenta: "#7C3D99",
+      cyan: "#1B7FB8",
+      white: "#B8BCC6",
+      brightBlack: "#5C6370",
+      brightRed: "#E01B1B",
+      brightGreen: "#21A189",
+      brightYellow: "#D67300",
+      brightBlue: "#277FFF",
+      brightMagenta: "#962AC3",
+      brightCyan: "#0590DE",
+      brightWhite: "#FFFFFF",
+    },
+    chrome: {
+      "--bg": "#f7f7f9",
+      "--bg-deep": "#eceef2",
+      "--panel": "#ffffff",
+      "--panel-hover": "#e4e7ee",
+      "--border": "#cdd1da",
+      "--text": "#1f2229",
+      "--muted": "#5c6370",
+      "--accent": "#2662cc",
+      "--accent-hover": "#277fff",
+      "--green": "#1e8a75",
+      "--yellow": "#b86200",
+      "--red": "#c01818",
+      "--error": "#c01818",
+    },
+  },
+  {
+    id: "dracula",
+    label: "Dracula",
+    dark: true,
+    term: {
+      background: "#282A36",
+      foreground: "#F8F8F2",
+      cursor: "#F8F8F2",
+      cursorAccent: "#282A36",
+      selectionBackground: "#44475A",
+      black: "#21222C",
+      red: "#FF5555",
+      green: "#50FA7B",
+      yellow: "#F1FA8C",
+      blue: "#BD93F9",
+      magenta: "#FF79C6",
+      cyan: "#8BE9FD",
+      white: "#F8F8F2",
+      brightBlack: "#6272A4",
+      brightRed: "#FF6E6E",
+      brightGreen: "#69FF94",
+      brightYellow: "#FFFFA5",
+      brightBlue: "#D6ACFF",
+      brightMagenta: "#FF92DF",
+      brightCyan: "#A4FFFF",
+      brightWhite: "#FFFFFF",
+    },
+    chrome: {
+      ...darkChrome,
+      "--bg": "#282a36",
+      "--bg-deep": "#21222c",
+      "--panel": "#303241",
+      "--panel-hover": "#3a3c4e",
+      "--border": "#44475a",
+      "--text": "#f8f8f2",
+      "--muted": "#a0a6c2",
+      "--accent": "#9b6ff0",
+      "--accent-hover": "#bd93f9",
+    },
+  },
+  {
+    id: "solarized-dark",
+    label: "Solarized Dark",
+    dark: true,
+    term: {
+      background: "#002B36",
+      foreground: "#93A1A1",
+      cursor: "#93A1A1",
+      cursorAccent: "#002B36",
+      selectionBackground: "#073642",
+      black: "#073642",
+      red: "#DC322F",
+      green: "#859900",
+      yellow: "#B58900",
+      blue: "#268BD2",
+      magenta: "#D33682",
+      cyan: "#2AA198",
+      white: "#EEE8D5",
+      brightBlack: "#586E75",
+      brightRed: "#CB4B16",
+      brightGreen: "#859900",
+      brightYellow: "#B58900",
+      brightBlue: "#268BD2",
+      brightMagenta: "#6C71C4",
+      brightCyan: "#2AA198",
+      brightWhite: "#FDF6E3",
+    },
+    chrome: {
+      ...darkChrome,
+      "--bg": "#002b36",
+      "--bg-deep": "#00212b",
+      "--panel": "#073642",
+      "--panel-hover": "#0b4352",
+      "--border": "#1d4f5c",
+      "--text": "#eee8d5",
+      "--muted": "#93a1a1",
+      "--accent": "#268bd2",
+      "--accent-hover": "#3a9ee6",
+    },
+  },
+  {
+    id: "high-contrast",
+    label: "High contrast",
+    dark: true,
+    term: {
+      background: "#000000",
+      foreground: "#FFFFFF",
+      cursor: "#FFFF00",
+      cursorAccent: "#000000",
+      selectionBackground: "#FFFFFF55",
+      black: "#000000",
+      red: "#FF4040",
+      green: "#40FF40",
+      yellow: "#FFFF40",
+      blue: "#5C9DFF",
+      magenta: "#FF60FF",
+      cyan: "#40FFFF",
+      white: "#E0E0E0",
+      brightBlack: "#9A9A9A",
+      brightRed: "#FF7070",
+      brightGreen: "#80FF80",
+      brightYellow: "#FFFF90",
+      brightBlue: "#8CB8FF",
+      brightMagenta: "#FF90FF",
+      brightCyan: "#90FFFF",
+      brightWhite: "#FFFFFF",
+    },
+    chrome: {
+      ...darkChrome,
+      "--bg": "#000000",
+      "--bg-deep": "#000000",
+      "--panel": "#111111",
+      "--panel-hover": "#262626",
+      "--border": "#8a8a8a",
+      "--text": "#ffffff",
+      "--muted": "#d0d0d0",
+      "--accent": "#3d8bff",
+      "--accent-hover": "#6aa5ff",
+    },
+  },
+];
+
+export const THEME_IDS = THEMES.map((t) => t.id);
+
+export function themeById(id: string): Theme {
+  return THEMES.find((t) => t.id === id) ?? THEMES[0];
+}
